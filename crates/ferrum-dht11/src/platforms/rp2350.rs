@@ -1,8 +1,7 @@
-
 //! RP2350 platform support for the DHT11 sensor.
 //!
 //! Provides a ready-to-use adapter for the Raspberry Pi Pico 2,
-//! initially supporting GPIO15 and TIMER0.
+//! supporting compatible RP2350 GPIO pins and TIMER0.
 
 use embedded_hal::delay::DelayNs as SyncDelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
@@ -13,23 +12,24 @@ use rp235x_hal as hal;
 use crate::hardware::{DhtPin, MicrosecondClock};
 use crate::{DhtError, Measurement};
 
-/// GPIO15 configured as a floating input.
-pub type DhtInputPin = hal::gpio::Pin<
-    hal::gpio::bank0::Gpio15,
-    hal::gpio::FunctionSio<hal::gpio::SioInput>,
-    hal::gpio::PullNone,
->;
+use hal::gpio::{FunctionSioOutput, ValidFunction};
 
 /// RP2350 TIMER0.
 pub type DhtTimer = hal::Timer<hal::timer::CopyableTimer0>;
 
 // ---- GPIO ADAPTER ----
 
-struct PicoPin {
-    pin: hal::gpio::InOutPin<DhtInputPin>,
+struct PicoPin<P>
+where
+    P: hal::gpio::AnyPin<Function = hal::gpio::FunctionSioInput, Pull = hal::gpio::PullNone>,
+{
+    pin: hal::gpio::InOutPin<P>,
 }
 
-impl DhtPin for PicoPin {
+impl<P> DhtPin for PicoPin<P>
+where
+    P: hal::gpio::AnyPin<Function = hal::gpio::FunctionSioInput, Pull = hal::gpio::PullNone>,
+{
     type Error = ();
 
     fn drive_low(&mut self) -> Result<(), Self::Error> {
@@ -72,15 +72,22 @@ impl AsyncDelayNs for PicoDelay {
 
 // ---- PUBLIC DRIVER ----
 
-/// Ready-to-use DHT11 driver for RP2350 TIMER0 and GPIO15.
-pub struct Dht11 {
-    inner: crate::Dht11<PicoPin, PicoClock>,
+/// Ready-to-use DHT11 driver for RP2350 GPIO and TIMER0.
+pub struct Dht11<P>
+where
+    P: hal::gpio::AnyPin<Function = hal::gpio::FunctionSioInput, Pull = hal::gpio::PullNone>,
+{
+    inner: crate::Dht11<PicoPin<P>, PicoClock>,
     delay: PicoDelay,
 }
 
-impl Dht11 {
-    /// Create a DHT11 driver from GPIO15 and an initialized TIMER0.
-    pub fn new(pin: DhtInputPin, timer: DhtTimer) -> Self {
+impl<P> Dht11<P>
+where
+    P: hal::gpio::AnyPin<Function = hal::gpio::FunctionSioInput, Pull = hal::gpio::PullNone>,
+    P::Id: ValidFunction<FunctionSioOutput>,
+{
+    /// Create a DHT11 driver using a compatible RP2350 GPIO.
+    pub fn new(pin: P, timer: DhtTimer) -> Self {
         let pin = PicoPin {
             pin: hal::gpio::InOutPin::new(pin),
         };
