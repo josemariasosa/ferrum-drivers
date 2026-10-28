@@ -3,8 +3,6 @@
 //! Provides a ready-to-use adapter for the Raspberry Pi Pico 2,
 //! supporting compatible RP2350 GPIO pins and TIMER0.
 
-#![no_std]
-
 use embedded_hal::delay::DelayNs as SyncDelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::delay::DelayNs as AsyncDelayNs;
