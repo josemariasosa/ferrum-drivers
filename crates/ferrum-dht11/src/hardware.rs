@@ -1,19 +1,23 @@
 /// A bidirectional data line for the DHT11 protocol.
 ///
-/// The host drives DATA low to initiate communication,
-/// then releases the line so the sensor can respond.
+/// The host drives DATA low to initiate communication, then releases the line
+/// so the sensor can respond. The released line must be pulled high externally
+/// (or by a suitable board-level pull-up); implementations should configure
+/// the pin so it does not actively drive high against the sensor.
 pub trait DhtPin {
+    /// The error type returned by GPIO operations.
     type Error;
 
-    /// Configure DATA as output and drive it LOW.
+    /// Configure DATA as an output and drive it low.
     fn drive_low(&mut self) -> Result<(), Self::Error>;
 
-    /// Release DATA by configuring the pin as input.
+    /// Release DATA, typically by configuring the pin as an input.
     fn release(&mut self) -> Result<(), Self::Error>;
 
-    /// Read the current logic level.
+    /// Read whether DATA is at a high logic level.
     fn is_high(&mut self) -> Result<bool, Self::Error>;
 
+    /// Read whether DATA is at a low logic level.
     fn is_low(&mut self) -> Result<bool, Self::Error> {
         self.is_high().map(|high| !high)
     }
@@ -21,9 +25,13 @@ pub trait DhtPin {
 
 /// A monotonic clock with microsecond resolution.
 ///
-/// Implementations must advance independently of the
-/// driver and must not wrap during a DHT11 transaction.
+/// The clock must continue advancing while the driver synchronously polls,
+/// provide useful resolution around microsecond-scale pulses, and use a
+/// consistent microsecond unit. Elapsed durations are computed with wrapping
+/// subtraction, so a `u64` rollover is supported provided a measured interval
+/// is shorter than the full counter period.
 pub trait MicrosecondClock {
+    /// Return the current monotonic time in microseconds.
     fn now_us(&self) -> u64;
 }
 
