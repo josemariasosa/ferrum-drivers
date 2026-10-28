@@ -7,3 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+embedded-hal-async.workspace = true
+
+[dev-dependencies]
+embedded-hal-mock = { version = "0.11", features = [
+    "eh1",
+    "embedded-hal-async",
+] }
+futures = "0.3"
