@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.cargo.target": null,
+    "rust-analyzer.check.targets": null,
+    "rust-analyzer.check.workspace": false
+}

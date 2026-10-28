@@ -1,0 +1,26 @@
+[package]
+name = "ferrum-dht11-rp2350"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ferrum-dht11 = { path = "../ferrum-dht11" }
+rp235x-hal = { workspace = true }
+embedded-hal.workspace = true
+embedded-hal-async.workspace = true
+
+# RP2350 firmware example
+[target.'thumbv8m.main-none-eabihf'.dev-dependencies]
+embassy-futures = "0.1"
+heapless = "0.8"
+usb-device = "0.3"
+usbd-serial = "0.2"
+rp235x-hal = { workspace = true, features = ["rt", "critical-section-impl"] }
+
+[[example]]
+name = "pico2_dht11"
+path = "examples/pico2_dht11.rs"
+test = false

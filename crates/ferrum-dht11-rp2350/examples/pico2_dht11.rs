@@ -5,7 +5,7 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 
 use embassy_futures::block_on;
-use ferrum_dht11::rp2350::Dht11;
+use ferrum_dht11_rp2350::Dht11;
 use heapless::String;
 use rp235x_hal as hal;
 

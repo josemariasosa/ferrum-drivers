@@ -3,14 +3,15 @@
 //! Provides a ready-to-use adapter for the Raspberry Pi Pico 2,
 //! supporting compatible RP2350 GPIO pins and TIMER0.
 
+#![no_std]
+
 use embedded_hal::delay::DelayNs as SyncDelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::delay::DelayNs as AsyncDelayNs;
 
 use rp235x_hal as hal;
 
-use crate::hardware::{DhtPin, MicrosecondClock};
-use crate::{DhtError, Measurement};
+use ferrum_dht11::{DhtError, DhtPin, Measurement, MicrosecondClock};
 
 use hal::gpio::{
     Function, FunctionSioInput, FunctionSioOutput, Pin, PinId, PullNone, PullType, ValidFunction,
@@ -79,7 +80,7 @@ pub struct Dht11<P>
 where
     P: hal::gpio::AnyPin<Function = hal::gpio::FunctionSioInput, Pull = hal::gpio::PullNone>,
 {
-    inner: crate::Dht11<PicoPin<P>, PicoClock>,
+    inner: ferrum_dht11::Dht11<PicoPin<P>, PicoClock>,
     delay: PicoDelay,
 }
 
@@ -109,7 +110,7 @@ where
         let delay = PicoDelay { timer };
 
         Self {
-            inner: crate::Dht11::new(pin, clock),
+            inner: ferrum_dht11::Dht11::new(pin, clock),
             delay,
         }
     }

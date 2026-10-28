@@ -18,3 +18,28 @@ cargo build -p ferrum-dht11 \
   --release
 
 - [DHT11 — Temperature & Humidity](docs/dht11.md)
+
+cargo check \
+  -p ferrum-dht11-rp2350 \
+  --lib \
+  --target thumbv8m.main-none-eabihf
+
+```sh
+# Formatting
+cargo fmt --all -- --check
+
+# Hardware-independent driver
+cargo check -p ferrum-dht11 --lib
+cargo test -p ferrum-dht11
+
+# RP2350 adapter
+cargo check -p ferrum-dht11-rp2350 \
+  --lib \
+  --target thumbv8m.main-none-eabihf
+
+# Pico 2 firmware
+cargo build -p ferrum-dht11-rp2350 \
+  --example pico2_dht11 \
+  --target thumbv8m.main-none-eabihf \
+  --release
+```

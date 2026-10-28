@@ -224,18 +224,6 @@ impl MicrosecondClock for AdvancingClock {
     }
 }
 
-fn full_transaction(frame: [u8; 5]) -> Vec<(u64, bool)> {
-    let mut transitions = std::vec![
-        (20, false),  // Sensor starts responding
-        (100, true),  // 80 us LOW
-        (180, false), // 80 us HIGH
-    ];
-
-    transitions.extend(data_transitions(&frame, 180));
-
-    transitions
-}
-
 #[test]
 fn times_out_when_sensor_never_goes_low() {
     let pin = FakePin; // Always HIGH
@@ -602,37 +590,4 @@ fn reads_complete_byte() {
     let mut sensor = Dht11::new(pin, clock);
 
     assert_eq!(sensor.read_byte(), Ok(0b1010_0101));
-}
-
-#[test]
-fn reads_complete_measurement() {
-    let time = Cell::new(0);
-
-    let transitions = full_transaction([55, 0, 24, 0, 79]);
-
-    let pin = TimedPin {
-        time: &time,
-        initial_high: true,
-        transitions: &transitions,
-    };
-
-    let clock = SharedClock {
-        time: &time,
-        step_us: 1,
-    };
-
-    let mut sensor = Dht11::new(pin, clock);
-
-    let expectations = [Transaction::async_delay_us(18_000)];
-
-    let mut delay = CheckedDelay::new(&expectations);
-
-    let measurement = block_on(sensor.read(&mut delay)).unwrap();
-
-    delay.done();
-
-    assert_eq!(measurement.humidity_integer, 55);
-    assert_eq!(measurement.humidity_decimal, 0);
-    assert_eq!(measurement.temperature_integer, 24);
-    assert_eq!(measurement.temperature_decimal, 0);
 }

@@ -278,11 +278,20 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 name = "ferrum-dht11"
 version = "0.1.0"
 dependencies = [
- "embassy-futures",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "embedded-hal-mock",
  "futures",
+]
+
+[[package]]
+name = "ferrum-dht11-rp2350"
+version = "0.1.0"
+dependencies = [
+ "embassy-futures",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "ferrum-dht11",
  "heapless",
  "rp235x-hal",
  "usb-device",
