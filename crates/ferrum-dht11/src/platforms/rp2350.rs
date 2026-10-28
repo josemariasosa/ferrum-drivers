@@ -12,7 +12,9 @@ use rp235x_hal as hal;
 use crate::hardware::{DhtPin, MicrosecondClock};
 use crate::{DhtError, Measurement};
 
-use hal::gpio::{FunctionSioOutput, ValidFunction};
+use hal::gpio::{
+    Function, FunctionSioInput, FunctionSioOutput, Pin, PinId, PullNone, PullType, ValidFunction,
+};
 
 /// RP2350 TIMER0.
 pub type DhtTimer = hal::Timer<hal::timer::CopyableTimer0>;
@@ -81,13 +83,24 @@ where
     delay: PicoDelay,
 }
 
-impl<P> Dht11<P>
+// ---- CONSTRUCTOR ----
+
+impl<I> Dht11<Pin<I, FunctionSioInput, PullNone>>
 where
-    P: hal::gpio::AnyPin<Function = hal::gpio::FunctionSioInput, Pull = hal::gpio::PullNone>,
-    P::Id: ValidFunction<FunctionSioOutput>,
+    I: PinId + ValidFunction<FunctionSioInput> + ValidFunction<FunctionSioOutput>,
 {
-    /// Create a DHT11 driver using a compatible RP2350 GPIO.
-    pub fn new(pin: P, timer: DhtTimer) -> Self {
+    /// Create a DHT11 driver from a compatible RP2350 GPIO
+    /// and an initialized TIMER0.
+    ///
+    /// The GPIO is automatically configured as a floating
+    /// SIO input. An external pull-up is required on DATA.
+    pub fn new<F, M>(pin: Pin<I, F, M>, timer: DhtTimer) -> Self
+    where
+        F: Function,
+        M: PullType,
+    {
+        let pin = pin.into_floating_input();
+
         let pin = PicoPin {
             pin: hal::gpio::InOutPin::new(pin),
         };
@@ -100,7 +113,14 @@ where
             delay,
         }
     }
+}
 
+// ---- SENSOR OPERATIONS ----
+
+impl<P> Dht11<P>
+where
+    P: hal::gpio::AnyPin<Function = FunctionSioInput, Pull = PullNone>,
+{
     /// Read and validate a temperature/humidity measurement.
     pub async fn read(&mut self) -> Result<Measurement, DhtError> {
         self.inner.read(&mut self.delay).await

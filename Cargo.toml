@@ -12,4 +12,4 @@ repository = "https://github.com/josemariasosa/ferrum-drivers"
 [workspace.dependencies]
 embedded-hal = "1.0"
 embedded-hal-async = "1.0"
-rp235x-hal = { version = "0.4", features = ["rt"] }
+rp235x-hal = { version = "0.4", default-features = false }

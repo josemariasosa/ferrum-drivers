@@ -60,8 +60,7 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    let dht_pin = pins.gpio15.into_floating_input();
-    let mut sensor = Dht11::new(dht_pin, timer);
+    let mut sensor = Dht11::new(pins.gpio15, timer);
 
     // ---- USB CDC ----
 
