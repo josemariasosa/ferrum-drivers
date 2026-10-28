@@ -6,12 +6,34 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# Core driver dependencies
 [dependencies]
 embedded-hal-async.workspace = true
+embedded-hal.workspace = true
+rp235x-hal = { workspace = true, optional = true }
 
-[dev-dependencies]
-embedded-hal-mock = { version = "0.11", features = [
+# Host-only testing
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+embedded-hal-mock = { version = "0.11", default-features = false, features = [
     "eh1",
     "embedded-hal-async",
 ] }
 futures = "0.3"
+
+# RP2350 firmware example
+[target.'thumbv8m.main-none-eabihf'.dev-dependencies]
+embassy-futures = "0.1"
+heapless = "0.8"
+usb-device = "0.3"
+usbd-serial = "0.2"
+rp235x-hal = { workspace = true, features = ["rt", "critical-section-impl"] }
+
+[features]
+default = []
+rp2350 = ["dep:rp235x-hal"]
+
+[[example]]
+name = "pico2_dht11"
+path = "examples/pico2_dht11.rs"
+test = false
+required-features = ["rp2350"]

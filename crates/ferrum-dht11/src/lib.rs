@@ -28,8 +28,12 @@
 
 mod driver;
 mod hardware;
+mod platforms;
 mod protocol;
 
 pub use driver::Dht11;
 pub use hardware::{DhtPin, MicrosecondClock};
 pub use protocol::{DhtError, Measurement};
+
+#[cfg(feature = "rp2350")]
+pub use platforms::rp2350;
