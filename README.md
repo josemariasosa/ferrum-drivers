@@ -19,6 +19,14 @@ cargo build -p ferrum-dht11 \
 
 - [DHT11 — Temperature & Humidity](docs/dht11.md)
 
+## Architecture
+
+Ferrum Drivers separates hardware-independent protocols from
+platform-specific integrations.
+
+See [ADR-001: Platform-Oriented Workspaces](docs/adr/001-platform-oriented-workspaces.md)
+for the architecture, rationale, and development rules.
+
 cargo check \
   -p ferrum-dht11-rp2350 \
   --lib \
