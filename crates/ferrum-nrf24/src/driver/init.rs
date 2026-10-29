@@ -5,29 +5,37 @@ where
     SPI: SpiDevice,
     CE: OutputPin,
 {
-    /// Configures, verifies, and starts receive-first operation on pipe 0.
+    /// Configures and verifies the nRF24L01+ transceiver, leaving it in Standby-I.
     ///
-    /// Requires [`RadioState::Unknown`]. Drives CE low, writes RF settings,
-    /// shared TX/RX addresses, five-byte address width, one-byte CRC, and DPL
-    /// with selective NO_ACK. After a 2 ms power-up wait, reads back CONFIG,
-    /// EN_AA, EN_RXADDR, RF_CH, RF_SETUP, SETUP_AW, FEATURE, DYNPD pipe 0, and
-    /// both addresses. Raises CE and waits 130 µs before returning Ready/RX.
-    /// Successful transmission later restores this listening mode automatically.
+    /// Requires [`RadioState::Uninitialized`]. Drives CE low and configures RF
+    /// settings, shared TX/RX addresses, five-byte address width, one-byte CRC,
+    /// and dynamic payloads on pipe 0 with selective NO_ACK support.
     ///
-    /// The caller must let the supply stabilize and power-on reset finish before
-    /// calling. The 2 ms wait assumes the datasheet's recommended crystal
-    /// (Ls < 30 mH); it is not a supply-startup delay. FIFOs and stale STATUS
-    /// flags are not reset by initialization. No ACTIVATE fallback is attempted.
+    /// After a 2 ms power-up delay, verifies CONFIG, EN_AA, EN_RXADDR, RF_CH,
+    /// RF_SETUP, SETUP_AW, FEATURE, DYNPD, and both TX/RX addresses.
     ///
-    /// [`InitError::NotReady`] leaves state and hardware unchanged. Any attempted
-    /// initialization failing on SPI, CE, or readback marks the driver Faulted
-    /// with unknown mode; CE is not guaranteed low after a GPIO failure.
+    /// On success, the radio enters [`RadioState::Standby`] with PWR_UP enabled
+    /// and CE low. The transceiver is configured and powered up, but is neither
+    /// transmitting nor listening. Call `start_listening()` to enter RX mode,
+    /// or `transmit()` to send a payload.
+    ///
+    /// The caller must allow the supply to stabilize and power-on reset to
+    /// complete before initialization. The 2 ms delay assumes the datasheet's
+    /// recommended crystal (Ls < 30 mH); it does not replace supply-startup
+    /// sequencing. FIFOs and stale STATUS flags are not cleared, and no
+    /// ACTIVATE fallback is attempted.
+    ///
+    /// [`InitError::NotReady`] leaves the driver and hardware unchanged.
+    /// Any attempted initialization that fails during SPI communication,
+    /// CE control, or register verification transitions the driver to
+    /// [`RadioState::Faulted`]. The physical radio state may be uncertain,
+    /// and CE is not guaranteed low after a GPIO failure.
     pub fn initialize<D: DelayNs>(
         &mut self,
         config: &RadioConfig,
         delay: &mut D,
     ) -> Result<(), InitError<SPI::Error, CE::Error>> {
-        if self.state != RadioState::Unknown {
+        if self.state != RadioState::Uninitialized {
             return Err(InitError::NotReady);
         }
 
@@ -35,63 +43,65 @@ where
 
         match result {
             Ok(()) => {
-                self.state = RadioState::Ready;
-                self.mode = Some(OperatingMode::Rx);
+                self.state = RadioState::Standby;
                 Ok(())
             }
             Err(error) => {
                 self.state = RadioState::Faulted;
-                self.mode = None;
                 Err(error)
             }
         }
     }
 
-    /// Legacy diagnostic PTX initializer; use [`Self::initialize`] for data I/O.
+    /// Starts listening for incoming packets on RX pipe 0.
     ///
-    /// Retained without a Rust deprecation attribute. Accepts Unknown or Ready,
-    /// including a currently listening driver. Drives CE low, disables EN_AA,
-    /// writes channel, rate/power and TX address, and sets PWR_UP/clears PRIM_RX.
-    /// Waits 2 ms and verifies those settings. Does not establish DPL, selective
-    /// NO_ACK, address width, RX address, or a particular CRC configuration.
-    /// Supply/POR and crystal assumptions match [`Self::initialize`].
-    ///
-    /// Success reports Ready in PTX standby with CE low: both [`Self::transmit`]
-    /// and [`Self::receive`] then return NotReady, and [`Self::initialize`] also
-    /// rejects Ready. Release resources and reconstruct for receive-first use.
-    /// Faulted is rejected without I/O; any attempted initialization failure
-    /// marks Faulted and invalidates the mode. This does not reset the radio.
-    pub fn initialize_tx<D: DelayNs>(
+    /// Requires [`RadioState::Standby`].
+    /// On success, leaves CE high and the radio in [`RadioState::Listening`].
+    /// A GPIO failure faults the driver because the physical CE level
+    /// may be uncertain.
+    pub fn start_listening<D: DelayNs>(
         &mut self,
-        config: &RadioConfig,
         delay: &mut D,
     ) -> Result<(), InitError<SPI::Error, CE::Error>> {
-        // A faulted radio cannot be reinitialized implicitly.
-        if self.state == RadioState::Faulted {
+        if self.state != RadioState::Standby {
             return Err(InitError::NotReady);
         }
 
-        let result = self.initialize_tx_inner(config, delay);
-
-        self.state = if result.is_ok() {
-            RadioState::Ready
-        } else {
-            RadioState::Faulted
-        };
-
-        self.mode = if result.is_ok() {
-            Some(OperatingMode::Tx)
-        } else {
-            None
-        };
-
-        result
+        match self.ce.set_high() {
+            Ok(()) => {
+                delay.delay_us(RADIO_SETTLING_US);
+                self.state = RadioState::Listening;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = RadioState::Faulted;
+                Err(InitError::Pin(error))
+            }
+        }
     }
 
-    fn switch_to_rx_inner<D: DelayNs>(
-        &mut self,
-        delay: &mut D,
-    ) -> Result<(), InitError<SPI::Error, CE::Error>> {
+    /// Stops listening and enters Standby-I.
+    ///
+    /// Requires [`RadioState::Listening`].
+    /// On success, CE is low and the radio is in [`RadioState::Standby`].
+    pub fn standby(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
+        if self.state != RadioState::Listening {
+            return Err(InitError::NotReady);
+        }
+
+        match self.ce.set_low() {
+            Ok(()) => {
+                self.state = RadioState::Standby;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = RadioState::Faulted;
+                Err(InitError::Pin(error))
+            }
+        }
+    }
+
+    pub(super) fn prepare_rx_standby(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
         self.ce.set_low().map_err(InitError::Pin)?;
 
         let config = self
@@ -101,37 +111,10 @@ where
         self.write_register(CONFIG, config | PRIM_RX)
             .map_err(|e| InitError::Configure(ConfigureError::Spi(e)))?;
 
-        self.ce.set_high().map_err(InitError::Pin)?;
-
-        delay.delay_us(RADIO_SETTLING_US);
-
         Ok(())
     }
 
-    pub(super) fn switch_to_rx<D: DelayNs>(
-        &mut self,
-        delay: &mut D,
-    ) -> Result<(), InitError<SPI::Error, CE::Error>> {
-        if self.state != RadioState::Ready || self.mode != Some(OperatingMode::Tx) {
-            return Err(InitError::NotReady);
-        }
-
-        let result = self.switch_to_rx_inner(delay);
-
-        match result {
-            Ok(()) => {
-                self.mode = Some(OperatingMode::Rx);
-                Ok(())
-            }
-            Err(error) => {
-                self.state = RadioState::Faulted;
-                self.mode = None;
-                Err(error)
-            }
-        }
-    }
-
-    fn switch_to_tx_inner(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
+    pub(super) fn switch_to_tx_inner(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
         self.ce.set_low().map_err(InitError::Pin)?;
 
         let config = self
@@ -144,26 +127,6 @@ where
             .map_err(|e| InitError::Configure(ConfigureError::Spi(e)))?;
 
         Ok(())
-    }
-
-    pub(super) fn switch_to_tx(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
-        if self.state != RadioState::Ready || self.mode != Some(OperatingMode::Rx) {
-            return Err(InitError::NotReady);
-        }
-
-        let result = self.switch_to_tx_inner();
-
-        match result {
-            Ok(()) => {
-                self.mode = Some(OperatingMode::Tx);
-                Ok(())
-            }
-            Err(error) => {
-                self.state = RadioState::Faulted;
-                self.mode = None;
-                Err(error)
-            }
-        }
     }
 
     fn initialize_rx_inner<D: DelayNs>(
@@ -182,40 +145,6 @@ where
 
         // 4. Verify hardware configuration.
         self.verify_rx_config(config)?;
-
-        // 5. Begin listening.
-        self.ce.set_high().map_err(InitError::Pin)?;
-
-        // 6. Allow RX mode to settle.
-        delay.delay_us(RADIO_SETTLING_US);
-
-        Ok(())
-    }
-
-    fn configure_tx(&mut self, config: &RadioConfig) -> Result<(), ConfigureError<SPI::Error>> {
-        // Disable Auto ACK.
-        self.write_register(EN_AA, 0x00)
-            .map_err(ConfigureError::Spi)?;
-
-        // Configure RF channel.
-        self.write_register(RF_CH, config.channel())
-            .map_err(ConfigureError::Spi)?;
-
-        // Configure data rate and TX output power.
-        self.write_register(RF_SETUP, config.rf_setup())
-            .map_err(ConfigureError::Spi)?;
-
-        // Configure destination address.
-        self.write_register_bytes(TX_ADDR, &config.address())
-            .map_err(ConfigureError::Register)?;
-
-        // Enable PTX mode.
-        let original = self.read_register(CONFIG).map_err(ConfigureError::Spi)?;
-
-        let tx_config = (original | PWR_UP) & !PRIM_RX;
-
-        self.write_register(CONFIG, tx_config)
-            .map_err(ConfigureError::Spi)?;
 
         Ok(())
     }
@@ -265,67 +194,6 @@ where
 
         self.write_register(CONFIG, rx_config)
             .map_err(ConfigureError::Spi)?;
-
-        Ok(())
-    }
-
-    fn initialize_tx_inner<D: DelayNs>(
-        &mut self,
-        config: &RadioConfig,
-        delay: &mut D,
-    ) -> Result<(), InitError<SPI::Error, CE::Error>> {
-        // 1. Keep the radio inactive during configuration.
-        self.ce.set_low().map_err(InitError::Pin)?;
-
-        // 2. Configure RF registers and power up in PTX mode.
-        self.configure_tx(config).map_err(InitError::Configure)?;
-
-        // 3. Wait for the radio to settle.
-        delay.delay_ms(POWER_UP_DELAY_MS);
-
-        // 4. Verify the essential configuration.
-        self.verify_tx_config(config)?;
-
-        Ok(())
-    }
-
-    fn verify_tx_config(
-        &mut self,
-        config: &RadioConfig,
-    ) -> Result<(), InitError<SPI::Error, CE::Error>> {
-        const CONFIG: u8 = 0x00;
-        const EN_AA: u8 = 0x01;
-        const RF_CH: u8 = 0x05;
-        const RF_SETUP: u8 = 0x06;
-        const TX_ADDR: u8 = 0x10;
-
-        const PWR_UP: u8 = 1 << 1;
-        const PRIM_RX: u8 = 1 << 0;
-
-        let read = |radio: &mut Self, register| {
-            radio
-                .read_register(register)
-                .map_err(|error| InitError::Configure(ConfigureError::Spi(error)))
-        };
-
-        let config_reg = read(self, CONFIG)?;
-        let en_aa = read(self, EN_AA)?;
-        let channel = read(self, RF_CH)?;
-        let rf_setup = read(self, RF_SETUP)?;
-
-        let mut address = [0u8; 5];
-
-        self.read_register_bytes(TX_ADDR, &mut address)
-            .map_err(|error| InitError::Configure(ConfigureError::Register(error)))?;
-
-        if config_reg & (PWR_UP | PRIM_RX) != PWR_UP
-            || en_aa != 0
-            || channel != config.channel()
-            || rf_setup != config.rf_setup()
-            || address != config.address()
-        {
-            return Err(InitError::VerificationFailed);
-        }
 
         Ok(())
     }
@@ -387,12 +255,10 @@ mod tests {
 
     use super::*;
 
-    use crate::config::{DataRate, TxPower};
-
     use embedded_hal_mock::eh1::{
         MockError,
-        delay::{CheckedDelay as DelayMock, NoopDelay, Transaction as DelayTransaction},
-        digital::{Mock as PinMock, State as PinState, State, Transaction as PinTransaction},
+        delay::{CheckedDelay as DelayMock, Transaction as DelayTransaction},
+        digital::{Mock as PinMock, State as PinState, Transaction as PinTransaction},
         spi::{Mock as SpiMock, Transaction as SpiTransaction},
     };
 
@@ -518,196 +384,7 @@ mod tests {
 
         let radio = Nrf24::new(spi, ce);
 
-        assert_eq!(radio.state(), RadioState::Unknown);
-
-        let (mut spi, mut ce) = radio.release();
-
-        spi.done();
-        ce.done();
-    }
-
-    #[test]
-    fn configure_tx_writes_expected_registers() {
-        let expectations = [
-            // Disable Auto ACK.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x21, 0x00], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // Set RF channel to 50.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x25, 0x32], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 1 Mbps, minimum output power.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x26, 0x00], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // Set TX address.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write_vec(vec![0x30, 0xE7, 0xE7, 0xE7, 0xE7, 0xE7]),
-            SpiTransaction::transaction_end(),
-            // Read CONFIG (original = 0x08).
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x00, 0xFF], vec![0x0E, 0x08]),
-            SpiTransaction::transaction_end(),
-            // Write CONFIG = 0x0A.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x20, 0x0A], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-        ];
-
-        let spi = SpiMock::new(&expectations);
-        let ce = PinMock::new(&[]);
-        let mut radio = Nrf24::new(spi, ce);
-
-        let config = RadioConfig::new(50, [0xE7; 5]).unwrap();
-
-        radio.configure_tx(&config).unwrap();
-
-        let (mut spi, mut ce) = radio.release();
-        spi.done();
-        ce.done();
-    }
-
-    #[test]
-    fn initialize_tx_transitions_from_unknown_to_ready() {
-        let expectations = [
-            // 1. Disable Auto ACK.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x21, 0x00], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 2. RF_CH = 50.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x25, 0x32], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 3. RF_SETUP = 0x00.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x26, 0x00], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 4. TX_ADDR = [0xE7; 5].
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write_vec(vec![0x30, 0xE7, 0xE7, 0xE7, 0xE7, 0xE7]),
-            SpiTransaction::transaction_end(),
-            // 5. Read original CONFIG = 0x08.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x00, 0xFF], vec![0x0E, 0x08]),
-            SpiTransaction::transaction_end(),
-            // 6. Power up in PTX mode: CONFIG = 0x0A.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x20, 0x0A], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 7. Verify CONFIG.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x00, 0xFF], vec![0x0E, 0x0A]),
-            SpiTransaction::transaction_end(),
-            // 8. Verify EN_AA.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x01, 0xFF], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 9. Verify RF_CH.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x05, 0xFF], vec![0x0E, 0x32]),
-            SpiTransaction::transaction_end(),
-            // 10. Verify RF_SETUP.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x06, 0xFF], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 11. Verify TX_ADDR.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write_vec(vec![0x10]),
-            SpiTransaction::read_vec(vec![0xE7; 5]),
-            SpiTransaction::transaction_end(),
-        ];
-
-        let ce_expectations = [PinTransaction::set(State::Low)];
-
-        let spi = SpiMock::new(&expectations);
-        let ce = PinMock::new(&ce_expectations);
-
-        let mut radio = Nrf24::new(spi, ce);
-        let mut delay = NoopDelay::new();
-
-        let config = RadioConfig::new(50, [0xE7; 5]).unwrap();
-
-        assert_eq!(radio.state(), RadioState::Unknown);
-
-        radio.initialize_tx(&config, &mut delay).unwrap();
-
-        assert_eq!(radio.mode, Some(OperatingMode::Tx));
-        assert_eq!(radio.state(), RadioState::Ready);
-
-        let (mut spi, mut ce) = radio.release();
-
-        spi.done();
-        ce.done();
-    }
-
-    #[test]
-    fn initialize_tx_verification_failure_sets_faulted() {
-        let expectations = [
-            // 1. Disable Auto ACK.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x21, 0x00], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 2. RF_CH = 50.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x25, 0x32], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 3. RF_SETUP = 0x00.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x26, 0x00], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 4. TX_ADDR = [0xE7; 5].
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write_vec(vec![0x30, 0xE7, 0xE7, 0xE7, 0xE7, 0xE7]),
-            SpiTransaction::transaction_end(),
-            // 5. Read original CONFIG = 0x08.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x00, 0xFF], vec![0x0E, 0x08]),
-            SpiTransaction::transaction_end(),
-            // 6. Power up in PTX mode: CONFIG = 0x0A.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x20, 0x0A], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 7. Verify CONFIG.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x00, 0xFF], vec![0x0E, 0x0A]),
-            SpiTransaction::transaction_end(),
-            // 8. Verify EN_AA.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x01, 0xFF], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 9. Expected channel 50, but hardware reports channel 42.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x05, 0xFF], vec![0x0E, 0x2A]),
-            SpiTransaction::transaction_end(),
-            // 10. Verify RF_SETUP.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::transfer_in_place(vec![0x06, 0xFF], vec![0x0E, 0x00]),
-            SpiTransaction::transaction_end(),
-            // 11. Verify TX_ADDR.
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write_vec(vec![0x10]),
-            SpiTransaction::read_vec(vec![0xE7; 5]),
-            SpiTransaction::transaction_end(),
-        ];
-
-        let ce_expectations = [PinTransaction::set(State::Low)];
-
-        let spi = SpiMock::new(&expectations);
-        let ce = PinMock::new(&ce_expectations);
-
-        let mut radio = Nrf24::new(spi, ce);
-        let mut delay = NoopDelay::new();
-
-        let config = RadioConfig::new(50, [0xE7; 5]).unwrap();
-
-        assert_eq!(radio.state(), RadioState::Unknown);
-
-        let result = radio.initialize_tx(&config, &mut delay);
-
-        assert_eq!(result, Err(InitError::VerificationFailed));
-
-        assert_eq!(radio.state(), RadioState::Faulted);
+        assert_eq!(radio.state(), RadioState::Uninitialized);
 
         let (mut spi, mut ce) = radio.release();
 
@@ -753,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn initialize_rx_starts_listening_after_verification() {
+    fn initialize_inner_leaves_radio_in_standby() {
         let config = RadioConfig::new(50, [0xE7; 5]).unwrap();
 
         let mut expectations = configure_rx_expectations();
@@ -761,15 +438,9 @@ mod tests {
 
         let spi = SpiMock::new(&expectations);
 
-        let ce = PinMock::new(&[
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
-        ]);
+        let ce = PinMock::new(&[PinTransaction::set(PinState::Low)]);
 
-        let mut delay = DelayMock::new(&[
-            DelayTransaction::delay_ms(POWER_UP_DELAY_MS),
-            DelayTransaction::delay_us(RADIO_SETTLING_US),
-        ]);
+        let mut delay = DelayMock::new(&[DelayTransaction::delay_ms(POWER_UP_DELAY_MS)]);
 
         let mut radio = Nrf24::new(spi, ce);
 
@@ -813,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn initialize_transitions_to_ready() {
+    fn initialize_transitions_to_standby() {
         let config = RadioConfig::new(50, [0xE7; 5]).unwrap();
 
         let mut expectations = configure_rx_expectations();
@@ -821,21 +492,16 @@ mod tests {
 
         let spi = SpiMock::new(&expectations);
 
-        let ce = PinMock::new(&[
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
-        ]);
+        // Initialization keeps CE low.
+        let ce = PinMock::new(&[PinTransaction::set(PinState::Low)]);
 
-        let mut delay = DelayMock::new(&[
-            DelayTransaction::delay_ms(POWER_UP_DELAY_MS),
-            DelayTransaction::delay_us(RADIO_SETTLING_US),
-        ]);
+        // Only the power-up delay is required.
+        let mut delay = DelayMock::new(&[DelayTransaction::delay_ms(POWER_UP_DELAY_MS)]);
 
         let mut radio = Nrf24::new(spi, ce);
 
         assert_eq!(radio.initialize(&config, &mut delay), Ok(()));
-        assert_eq!(radio.state(), RadioState::Ready);
-        assert_eq!(radio.mode, Some(OperatingMode::Rx));
+        assert_eq!(radio.state(), RadioState::Standby);
 
         let (mut spi, mut ce) = radio.release();
 
@@ -867,104 +533,12 @@ mod tests {
             Err(InitError::VerificationFailed)
         );
         assert_eq!(radio.state(), RadioState::Faulted);
-        assert_eq!(radio.mode, None);
 
         let (mut spi, mut ce) = radio.release();
 
         spi.done();
         ce.done();
         delay.done();
-    }
-
-    #[test]
-    fn verify_tx_accepts_custom_rf_setup() {
-        let config = RadioConfig::new(50, [0xE7; 5])
-            .unwrap()
-            .with_data_rate(DataRate::Mbps2)
-            .with_tx_power(TxPower::High);
-
-        let registers = [
-            (CONFIG, 0x0A),   // PWR_UP = 1, PRIM_RX = 0
-            (EN_AA, 0x00),    // Auto ACK disabled
-            (RF_CH, 0x32),    // Channel 50
-            (RF_SETUP, 0x0C), // 2 Mbps + High power
-        ];
-
-        let mut expectations = Vec::new();
-
-        for (register, value) in registers {
-            expectations.extend([
-                SpiTransaction::transaction_start(),
-                SpiTransaction::transfer_in_place(vec![register, 0xFF], vec![0x00, value]),
-                SpiTransaction::transaction_end(),
-            ]);
-        }
-
-        // Verify TX_ADDR = [0xE7; 5].
-        expectations.extend([
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write_vec(vec![TX_ADDR]),
-            SpiTransaction::read_vec(vec![0xE7; 5]),
-            SpiTransaction::transaction_end(),
-        ]);
-
-        let spi = SpiMock::new(&expectations);
-        let ce = PinMock::new(&[]);
-
-        let mut radio = Nrf24::new(spi, ce);
-
-        assert_eq!(radio.verify_tx_config(&config), Ok(()));
-
-        let (mut spi, mut ce) = radio.release();
-        spi.done();
-        ce.done();
-    }
-
-    #[test]
-    fn verify_tx_fails_custom_rf_setup() {
-        let config = RadioConfig::new(50, [0xE7; 5])
-            .unwrap()
-            .with_data_rate(DataRate::Mbps2)
-            .with_tx_power(TxPower::High);
-
-        let registers = [
-            (CONFIG, 0x0A),   // PWR_UP = 1, PRIM_RX = 0
-            (EN_AA, 0x00),    // Auto ACK disabled
-            (RF_CH, 0x32),    // Channel 50
-            (RF_SETUP, 0x00), // Incorrect: expected 0x0C
-        ];
-
-        let mut expectations = Vec::new();
-
-        for (register, value) in registers {
-            expectations.extend([
-                SpiTransaction::transaction_start(),
-                SpiTransaction::transfer_in_place(vec![register, 0xFF], vec![0x00, value]),
-                SpiTransaction::transaction_end(),
-            ]);
-        }
-
-        // Verify TX_ADDR = [0xE7; 5].
-        expectations.extend([
-            SpiTransaction::transaction_start(),
-            SpiTransaction::write_vec(vec![TX_ADDR]),
-            SpiTransaction::read_vec(vec![0xE7; 5]),
-            SpiTransaction::transaction_end(),
-        ]);
-
-        let spi = SpiMock::new(&expectations);
-        let ce = PinMock::new(&[]);
-
-        let mut radio = Nrf24::new(spi, ce);
-
-        assert_eq!(
-            radio.verify_tx_config(&config),
-            Err(InitError::VerificationFailed)
-        );
-
-        let (mut spi, mut ce) = radio.release();
-        spi.done();
-        ce.done();
     }
 
     fn switch_expectations(original: u8, updated: u8) -> Vec<SpiTransaction<u8>> {
@@ -983,103 +557,23 @@ mod tests {
     #[test]
     fn switch_to_tx_clears_prim_rx() {
         let spi = SpiMock::new(&switch_expectations(0x0B, 0x0A));
-
         let ce = PinMock::new(&[PinTransaction::set(PinState::Low)]);
 
-        let mut delay = DelayMock::new(&[]);
-
         let mut radio = Nrf24::new(spi, ce);
+        radio.state = RadioState::Listening;
 
-        // Simulate an already initialized receiver.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
-
-        assert_eq!(radio.switch_to_tx(), Ok(()));
-
-        assert_eq!(radio.state(), RadioState::Ready);
-        assert_eq!(radio.mode, Some(OperatingMode::Tx));
+        assert_eq!(radio.switch_to_tx_inner(), Ok(()));
 
         let (mut spi, mut ce) = radio.release();
         spi.done();
         ce.done();
-        delay.done();
     }
 
     #[test]
-    fn switch_to_rx_sets_prim_rx() {
-        let spi = SpiMock::new(&switch_expectations(0x0A, 0x0B));
-
-        let ce = PinMock::new(&[
-            PinTransaction::set(PinState::Low),
-            PinTransaction::set(PinState::High),
-        ]);
-
-        let mut delay = DelayMock::new(&[DelayTransaction::delay_us(RADIO_SETTLING_US)]);
-
-        let mut radio = Nrf24::new(spi, ce);
-
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Tx);
-
-        assert_eq!(radio.switch_to_rx(&mut delay), Ok(()));
-
-        assert_eq!(radio.state(), RadioState::Ready);
-        assert_eq!(radio.mode, Some(OperatingMode::Rx));
-
-        let (mut spi, mut ce) = radio.release();
-        spi.done();
-        ce.done();
-        delay.done();
-    }
-
-    #[test]
-    fn switch_to_tx_rejects_invalid_mode() {
-        let spi = SpiMock::new(&[]);
-        let ce = PinMock::new(&[]);
-        let mut delay = DelayMock::new(&[]);
-
-        let mut radio = Nrf24::new(spi, ce);
-
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Tx);
-
-        assert_eq!(radio.switch_to_tx(), Err(InitError::NotReady));
-
-        assert_eq!(radio.state(), RadioState::Ready);
-        assert_eq!(radio.mode, Some(OperatingMode::Tx));
-
-        let (mut spi, mut ce) = radio.release();
-        spi.done();
-        ce.done();
-        delay.done();
-    }
-
-    #[test]
-    fn switch_to_rx_rejects_invalid_mode() {
-        let spi = SpiMock::new(&[]);
-        let ce = PinMock::new(&[]);
-        let mut delay = DelayMock::new(&[]);
-
-        let mut radio = Nrf24::new(spi, ce);
-
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
-
-        assert_eq!(radio.switch_to_rx(&mut delay), Err(InitError::NotReady));
-
-        assert_eq!(radio.state(), RadioState::Ready);
-        assert_eq!(radio.mode, Some(OperatingMode::Rx));
-
-        let (mut spi, mut ce) = radio.release();
-        spi.done();
-        ce.done();
-        delay.done();
-    }
-
-    #[test]
-    fn switch_failure_faults_driver() {
+    fn transmit_faults_when_entering_tx_fails() {
         let spi = SpiMock::new(&[]);
 
+        // CE fails when attempting to enter TX mode.
         let ce = PinMock::new(&[
             PinTransaction::set(PinState::Low).with_error(MockError::Io(ErrorKind::Other))
         ]);
@@ -1088,18 +582,21 @@ mod tests {
 
         let mut radio = Nrf24::new(spi, ce);
 
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        // Simulate an initialized radio in RX mode.
+        radio.state = RadioState::Listening;
 
-        let result = radio.switch_to_tx();
+        let result = radio.transmit(&[0x42], &mut delay);
 
-        assert!(matches!(result, Err(InitError::Pin(_))));
+        assert!(matches!(
+            result,
+            Err(TxError::ModeSwitch(InitError::Pin(_)))
+        ));
 
-        // Fail-stop invariant.
+        // A failed hardware transition must fault the driver.
         assert_eq!(radio.state(), RadioState::Faulted);
-        assert_eq!(radio.mode, None);
 
         let (mut spi, mut ce) = radio.release();
+
         spi.done();
         ce.done();
         delay.done();

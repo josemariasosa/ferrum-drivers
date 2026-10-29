@@ -5,42 +5,28 @@ where
     SPI: SpiDevice,
     CE: OutputPin,
 {
-    /// Polls for one payload, returning its exact length or `None` if empty.
+    /// Polls for one received payload while the radio is listening.
     ///
-    /// Requires verified initialization in RX mode. A short buffer leaves the
-    /// payload queued and can be retried. Zero or oversized widths flush the
-    /// entire RX FIFO and return `InvalidPayloadWidth`; successful recovery
-    /// preserves Ready/RX because no configuration or mode was changed.
+    /// Requires [`RadioState::Listening`]. Returns `Ok(None)` when the
+    /// RX FIFO is empty, or `Ok(Some(length))` after reading one payload.
     ///
-    /// Any SPI failure faults the driver and invalidates the known mode. After
-    /// an error the buffer may have been partially written; only use its data
-    /// on `Ok(Some(length))`. No GPIO changes, allocation, or wait for an RF
-    /// packet occurs; SPI transactions themselves are synchronous and may block.
+    /// A successful call preserves the Listening state. Invalid buffer
+    /// sizes and successfully recovered invalid payload widths do not
+    /// change the radio state.
     ///
-    /// `Ok(None)` means the FIFO was empty at inspection; the buffer is untouched.
-    /// `Ok(Some(length))` writes only `buffer[..length]`, leaving its tail intact.
-    /// A 32-byte buffer accepts every supported payload; smaller buffers are
-    /// allowed if the oldest packet fits. An undersized buffer is untouched.
-    /// Reading the full payload under one CSN assertion removes that FIFO entry
-    /// when CSN rises, before RX_DR is cleared. If the subsequent clear fails,
-    /// the method returns an error although the packet was already consumed.
-    /// A failed payload transaction may also have consumed data; it is not retryable.
-    /// Invalid-width recovery discards every queued packet, including valid ones.
-    /// Peers must use NO_ACK: recovery does not coordinate with hardware ACK TX.
-    ///
-    /// Availability always comes from FIFO_STATUS, not RX_DR. Clearing RX_DR
-    /// acknowledges a notification, not a FIFO entry. A concurrently arriving
-    /// payload remains discoverable on the next poll even if its flag is cleared.
+    /// An SPI failure marks the driver as [`RadioState::Faulted`],
+    /// because the hardware state or FIFO contents may be uncertain.
     pub fn receive(&mut self, buffer: &mut [u8]) -> Result<Option<usize>, RxError<SPI::Error>> {
-        if self.state != RadioState::Ready || self.mode != Some(OperatingMode::Rx) {
+        if self.state != RadioState::Listening {
             return Err(RxError::NotReady);
         }
 
         let result = self.receive_inner(buffer);
+
         if matches!(result, Err(RxError::Spi(_))) {
             self.state = RadioState::Faulted;
-            self.mode = None;
         }
+
         result
     }
 
@@ -215,14 +201,12 @@ mod tests {
 
     fn ready(e: &[SpiTransaction<u8>]) -> Nrf24<SpiMock<u8>, PinMock> {
         let mut radio = Nrf24::new(SpiMock::new(e), PinMock::new(&[]));
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
         radio
     }
 
     fn done(radio: Nrf24<SpiMock<u8>, PinMock>) {
-        assert_eq!(radio.state(), RadioState::Ready);
-        assert_eq!(radio.mode, Some(OperatingMode::Rx));
+        assert_eq!(radio.state(), RadioState::Listening);
         let (mut spi, mut ce) = radio.release();
         spi.done();
         ce.done();
@@ -294,7 +278,7 @@ mod tests {
                 })
             );
             assert_eq!(buffer, [0xAA; 3]);
-            assert_eq!(radio.state(), RadioState::Ready);
+            assert_eq!(radio.state(), RadioState::Listening);
             assert_eq!(radio.receive(&mut buffer), Ok(Some(3)));
             assert_eq!(buffer, [1, 2, 3]);
             done(radio);
@@ -313,7 +297,7 @@ mod tests {
                 Err(RxError::InvalidPayloadWidth(width))
             );
             assert_eq!(buffer, [0xAA; 32]);
-            assert_eq!(radio.state(), RadioState::Ready);
+            assert_eq!(radio.state(), RadioState::Listening);
             assert_eq!(radio.receive(&mut buffer), Ok(Some(1)));
             assert_eq!(buffer[0], 0x42);
             done(radio);
@@ -327,15 +311,14 @@ mod tests {
             calls: 0,
         };
         let mut radio = Nrf24::new(spi, PinMock::new(&[]));
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
+
         let mut buffer = [0; 32];
         assert_eq!(
             radio.receive(&mut buffer),
             Err(RxError::Spi(ErrorKind::Other))
         );
         assert_eq!(radio.state(), RadioState::Faulted);
-        assert_eq!(radio.mode, None);
         assert_eq!(radio.receive(&mut buffer), Err(RxError::NotReady));
         let (mut spi, mut ce) = radio.release();
         spi.mock.done();
@@ -384,19 +367,22 @@ mod tests {
     }
 
     #[test]
-    fn receive_rejects_uninitialized_faulted_and_tx_without_hardware_access() {
-        for (state, mode) in [
-            (RadioState::Unknown, None),
-            (RadioState::Faulted, None),
-            (RadioState::Ready, Some(OperatingMode::Tx)),
-            (RadioState::Ready, None),
+    fn receive_rejects_non_listening_states_without_hardware_access() {
+        for state in [
+            RadioState::Uninitialized,
+            RadioState::Standby,
+            RadioState::PowerDown,
+            RadioState::Faulted,
         ] {
             let mut radio = Nrf24::new(SpiMock::new(&[]), PinMock::new(&[]));
+
             radio.state = state;
-            radio.mode = mode;
+
             assert_eq!(radio.receive(&mut [0; 32]), Err(RxError::NotReady));
+
+            // Rejected operations must preserve the state.
             assert_eq!(radio.state(), state);
-            assert_eq!(radio.mode, mode);
+
             let (mut spi, mut ce) = radio.release();
             spi.done();
             ce.done();
@@ -437,8 +423,8 @@ mod tests {
             PinTransaction::set(State::High),
         ]);
         let mut radio = Nrf24::new(SpiMock::new(&e), ce);
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
+
         assert_eq!(radio.rx_available(), Ok(true));
         let mut delay = CheckedDelay::new(&[
             DelayTransaction::delay_us(20),

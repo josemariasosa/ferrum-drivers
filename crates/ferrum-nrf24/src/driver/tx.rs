@@ -5,77 +5,104 @@ where
     SPI: SpiDevice,
     CE: OutputPin,
 {
-    /// Temporarily switches from RX to TX to transmit a single payload.
+    /// Transmits a single payload and restores the previous radio state.
     ///
-    /// Requires `RadioState::Ready` in RX mode and a payload of 1..=32 bytes.
+    /// Requires [`RadioState::Standby`] or [`RadioState::Listening`] and a
+    /// payload of 1..=32 bytes. Transmission from PowerDown, Uninitialized,
+    /// or Faulted is rejected without hardware access.
     ///
-    /// Flushes the TX FIFO, clears TX interrupt flags, loads the payload,
-    /// pulses CE, and polls STATUS until completion or timeout.
+    /// Temporarily switches the transceiver to TX mode, flushes the TX FIFO,
+    /// clears TX interrupt flags, loads the payload, pulses CE, and polls
+    /// STATUS until transmission completes or times out.
     ///
-    /// On success, verifies that the TX FIFO is empty and clears TX_DS.
+    /// On successful transmission, verifies that the TX FIFO is empty and
+    /// clears TX_DS. The previous stable radio state is then restored:
     ///
-    /// Sends with `W_TX_PAYLOAD_NOACK`; FEATURE.EN_DYN_ACK must remain enabled
-    /// by initialization. There is no ACK request or automatic retransmission.
-    /// Queued RX payloads and RX_DR are preserved; old TX payloads are discarded.
-    /// RX is unavailable during this synchronous operation.
+    /// - Standby -> TX -> Standby
+    /// - Listening -> TX -> Listening
     ///
-    /// After a successful switch to TX, RX restoration is attempted for every TX result. Any TX or restoration
-    /// failure transitions to `Faulted` and invalidates the known mode.
-    /// If both fail, the original TX error is returned.
-    /// A failure entering TX faults immediately without attempting restoration.
-    /// NotReady and invalid payload length perform no I/O and preserve state.
-    /// Successful return means Ready/RX after 130 µs settling. A restoration
-    /// failure can be returned even when the packet was already sent; blindly
-    /// retrying after external recovery can therefore duplicate application data.
+    /// When restoring Listening, the driver re-enables RX and waits 130 us
+    /// for the radio to settle. RX is unavailable during transmission.
     ///
-    /// With automatic acknowledgments disabled, TX completion does not
-    /// guarantee reception by another device.
+    /// Uses W_TX_PAYLOAD_NOACK with FEATURE.EN_DYN_ACK enabled during
+    /// initialization. No acknowledgment is requested and no automatic
+    /// retransmission is performed. TX completion does not guarantee that
+    /// another device received the payload.
     ///
-    /// The timeout is based on 100 STATUS polls with 100 us delays,
-    /// not an exact wall-clock deadline.
+    /// Pending RX payloads and RX_DR are preserved. Any previously queued
+    /// TX payloads are discarded before transmission.
+    ///
+    /// Invalid payload length and invalid starting state cause no hardware
+    /// I/O and preserve the current radio state.
+    ///
+    /// If entering TX mode fails, the driver transitions to
+    /// [`RadioState::Faulted`] without attempting restoration.
+    ///
+    /// Once TX mode has been entered, restoration of the previous stable
+    /// state is attempted regardless of the transmission result. Any
+    /// transmission or restoration failure leaves the driver Faulted.
+    /// If both fail, the original transmission error takes precedence.
+    ///
+    /// A restoration failure may occur after the payload was transmitted.
+    /// Retrying the same application message may therefore produce duplicates.
+    ///
+    /// The timeout uses at most 100 STATUS polls separated by 100 us delays.
+    /// It is not an exact wall-clock deadline.
     pub fn transmit<D: DelayNs>(
         &mut self,
         payload: &[u8],
         delay: &mut D,
     ) -> Result<(), TxError<SPI::Error, CE::Error>> {
-        if self.state != RadioState::Ready || self.mode != Some(OperatingMode::Rx) {
+        let previous_state = self.state;
+
+        if !matches!(previous_state, RadioState::Standby | RadioState::Listening) {
             return Err(TxError::NotReady);
         }
 
-        // Validate before any hardware interaction.
         if payload.is_empty() || payload.len() > 32 {
             return Err(TxError::Payload(PayloadError::InvalidLength));
         }
 
-        // RX -> TX
-        self.switch_to_tx().map_err(TxError::ModeSwitch)?;
+        // Enter TX mode.
+        if let Err(error) = self.switch_to_tx_inner() {
+            self.state = RadioState::Faulted;
+            return Err(TxError::ModeSwitch(error));
+        }
 
-        // Perform transmission.
+        // Perform the actual transmission.
         let tx_result = self.transmit_inner(payload, delay);
 
-        // TX -> RX, even if transmission failed.
-        let restore_result = self.switch_to_rx(delay);
+        // Restore RX configuration in Standby.
+        let restore_result = (|| {
+            self.prepare_rx_standby()?;
+
+            if previous_state == RadioState::Listening {
+                self.ce.set_high().map_err(InitError::Pin)?;
+                delay.delay_us(RADIO_SETTLING_US);
+            }
+
+            Ok::<_, InitError<SPI::Error, CE::Error>>(())
+        })();
 
         match (tx_result, restore_result) {
-            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Ok(())) => {
+                self.state = previous_state;
+                Ok(())
+            }
 
             (Err(error), Ok(())) => {
                 self.state = RadioState::Faulted;
-                self.mode = None;
                 Err(error)
             }
 
             (Ok(()), Err(error)) => {
-                // switch_to_rx already marks the radio as Faulted.
+                self.state = RadioState::Faulted;
                 Err(TxError::ModeSwitch(error))
             }
 
-            (Err(tx_error), Err(_restore_error)) => {
-                // Both operations failed. Preserve the original TX error.
-                // The driver remains Faulted.
+            (Err(error), Err(_)) => {
                 self.state = RadioState::Faulted;
-                self.mode = None;
-                Err(tx_error)
+                Err(error)
             }
         }
     }
@@ -213,8 +240,7 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
 
         // Test fixture: initialization is tested separately.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delay = NoopDelay::new();
 
@@ -274,8 +300,7 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
 
         // Test fixture: initialization is tested separately.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delays = vec![DelayTransaction::delay_us(20)];
         delays.push(DelayTransaction::delay_us(130));
@@ -283,8 +308,7 @@ mod tests {
 
         radio.transmit(&[0x01, 0x02, 0x03], &mut delay).unwrap();
 
-        assert_eq!(radio.state(), RadioState::Ready);
-        assert_eq!(radio.mode, Some(OperatingMode::Rx));
+        assert_eq!(radio.state(), RadioState::Listening);
         delay.done();
         let (mut spi, mut ce) = radio.release();
 
@@ -333,8 +357,7 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
 
         // Test fixture: initialization is tested separately.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delays = vec![DelayTransaction::delay_us(20)];
         delays.push(DelayTransaction::delay_us(130));
@@ -345,7 +368,6 @@ mod tests {
         assert_eq!(result, Err(TxError::MaxRetries));
 
         assert_eq!(radio.state(), RadioState::Faulted);
-        assert_eq!(radio.mode, None);
         delay.done();
         let (mut spi, mut ce) = radio.release();
 
@@ -399,8 +421,7 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
 
         // Test fixture: initialization is tested separately.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delays = vec![DelayTransaction::delay_us(20)];
         delays.extend((0..100).map(|_| DelayTransaction::delay_us(100)));
@@ -419,7 +440,6 @@ mod tests {
         assert_eq!(radio.state(), RadioState::Faulted);
 
         assert_eq!(radio.state(), RadioState::Faulted);
-        assert_eq!(radio.mode, None);
         delay.done();
         let (mut spi, mut ce) = radio.release();
 
@@ -440,8 +460,7 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
 
         // Test fixture: initialization is tested separately.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delay = NoopDelay::new();
 
@@ -472,8 +491,7 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
 
         // Test fixture: initialization is tested separately.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delay = NoopDelay::new();
 
@@ -503,8 +521,7 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
 
         // Test fixture: initialization is tested separately.
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delay = NoopDelay::new();
 
@@ -526,12 +543,12 @@ mod tests {
         let mut radio = Nrf24::new(spi, ce);
         let mut delay = NoopDelay::new();
 
-        assert_eq!(radio.state(), RadioState::Unknown);
+        assert_eq!(radio.state(), RadioState::Uninitialized);
 
         let result = radio.transmit(&[0x01], &mut delay);
 
         assert_eq!(result, Err(TxError::NotReady));
-        assert_eq!(radio.state(), RadioState::Unknown);
+        assert_eq!(radio.state(), RadioState::Uninitialized);
 
         let (mut spi, mut ce) = radio.release();
 
@@ -545,8 +562,7 @@ mod tests {
         let ce = PinMock::new(&[]);
 
         let mut radio = Nrf24::new(spi, ce);
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
 
         let mut delay = NoopDelay::new();
 
@@ -561,22 +577,32 @@ mod tests {
             Err(TxError::Payload(PayloadError::InvalidLength))
         );
 
-        assert_eq!(radio.state(), RadioState::Ready);
+        assert_eq!(radio.state(), RadioState::Listening);
 
         let (mut spi, mut ce) = radio.release();
 
         spi.done();
         ce.done();
     }
+
     #[test]
-    fn transmit_rejects_invalid_mode_without_hardware_access() {
-        for mode in [None, Some(OperatingMode::Tx)] {
+    fn transmit_rejects_invalid_states_without_hardware_access() {
+        for state in [
+            RadioState::Uninitialized,
+            RadioState::PowerDown,
+            RadioState::Faulted,
+        ] {
             let mut radio = Nrf24::new(SpiMock::new(&[]), PinMock::new(&[]));
-            radio.state = RadioState::Ready;
-            radio.mode = mode;
+
+            radio.state = state;
+
             let mut delay = CheckedDelay::new(&[]);
+
             assert_eq!(radio.transmit(&[1], &mut delay), Err(TxError::NotReady));
-            assert_eq!(radio.mode, mode);
+
+            // Rejected operations must preserve the state.
+            assert_eq!(radio.state(), state);
+
             let (mut spi, mut ce) = radio.release();
             spi.done();
             ce.done();
@@ -598,8 +624,7 @@ mod tests {
                 },
                 PinMock::new(&[PinTransaction::set(State::Low)]),
             );
-            radio.state = RadioState::Ready;
-            radio.mode = Some(OperatingMode::Rx);
+            radio.state = RadioState::Listening;
             let mut delay = CheckedDelay::new(&[]);
             assert_eq!(
                 radio.transmit(&[1], &mut delay),
@@ -608,7 +633,6 @@ mod tests {
                 )))
             );
             assert_eq!(radio.state(), RadioState::Faulted);
-            assert_eq!(radio.mode, None);
             let (mut spi, mut ce) = radio.release();
             spi.mock.done();
             ce.done();
@@ -640,15 +664,13 @@ mod tests {
                 PinTransaction::set(State::High),
             ]),
         );
-        radio.state = RadioState::Ready;
-        radio.mode = Some(OperatingMode::Rx);
+        radio.state = RadioState::Listening;
         let mut delay = CheckedDelay::new(&[DelayTransaction::delay_us(130)]);
         assert_eq!(
             radio.transmit(&[1], &mut delay),
             Err(TxError::Spi(embedded_hal::spi::ErrorKind::Other))
         );
         assert_eq!(radio.state(), RadioState::Faulted);
-        assert_eq!(radio.mode, None);
         let (mut spi, mut ce) = radio.release();
         spi.mock.done();
         ce.done();
@@ -727,8 +749,7 @@ mod tests {
                     },
                     PinMock::new(&pins),
                 );
-                radio.state = RadioState::Ready;
-                radio.mode = Some(OperatingMode::Rx);
+                radio.state = RadioState::Listening;
                 let mut delay = CheckedDelay::new(&[DelayTransaction::delay_us(20)]);
                 assert_eq!(
                     radio.transmit(&[1], &mut delay),
@@ -739,7 +760,6 @@ mod tests {
                     })
                 );
                 assert_eq!(radio.state(), RadioState::Faulted);
-                assert_eq!(radio.mode, None);
                 assert_eq!(radio.transmit(&[1], &mut delay), Err(TxError::NotReady));
                 let (mut spi, mut ce) = radio.release();
                 spi.mock.done();
