@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Scaffold for a portable no_std nRF24L01+ radio driver; functionality is not implemented."
+description = "Portable no_std nRF24L01+ radio driver for embedded Rust."
 readme = "README.md"
 keywords = ["nrf24l01", "radio", "embedded", "no-std", "spi"]
 categories = ["embedded", "no-std", "hardware-support"]
@@ -14,3 +14,7 @@ categories = ["embedded", "no-std", "hardware-support"]
 maintenance = { status = "experimental" }
 
 [dependencies]
+embedded-hal = { workspace = true }
+
+[dev-dependencies]
+embedded-hal-mock = "0.11"
