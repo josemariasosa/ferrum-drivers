@@ -25,7 +25,7 @@ fn main() -> ! {
 
     // ---- READING INTERVAL ----
 
-    let mut delay = Delay::new();
+    let delay = Delay::new();
 
     println!("Ferrum DHT11 - ESP32-C3");
     println!("Sensor: GPIO3 (XIAO D1)");

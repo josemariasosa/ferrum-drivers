@@ -1,255 +1,333 @@
-# `ferrum-dht11` audit
+# Ferrum DHT11 Driver Audit
 
-## Executive summary
+**Audit date:** 2026-10-28
 
-**Re-audit date: October 28, 2026.** The current implementation is a compact
-`no_std` driver with a workable RP2350 adapter and a straightforward public
-constructor. Its start pulse, response handshake, MSB-first 40-bit assembly,
-wrapping checksum, and RP2350 open-drain release behavior are represented
-correctly. The confirmed concerns are limited: data-bit pulse validation is
-permissive, the `async` API blocks during the start delay and pulse polling,
-and several tests do not exercise timing boundaries or injected GPIO failures.
-There are no Critical or High findings in this re-audit.
+## 1. Executive Summary
 
-The earlier report's polling-error and late-timeout findings do not describe
-the current runtime code: GPIO read errors now map to `PinError`, and sampled
-edges after the timeout are rejected. The related Rustdoc still contains the
-old GPIO-error description and should be corrected.
+`ferrum-dht11` is a compact, `no_std` protocol driver with hardware-independent
+core logic and working RP2350 and ESP32-C3 adapters. Code inspection supports
+the start signal, response handshake, 40-bit MSB-first frame assembly,
+wrapping checksum, GPIO release, and error propagation. Both platform examples
+compiled in release mode during this audit. Developer-reported physical tests
+demonstrate successful readings on a Raspberry Pi Pico 2 and six consecutive
+readings on a Seeed XIAO ESP32-C3 using GPIO3.
 
-The developer reports successful repeated measurements on a Pico 2 / DHT11
-connected to GP15 (approximately 24.5 °C and 69% RH). This report records that
-as developer-reported validation only; it was not independently reproduced
-during this audit.
+There are no Critical or High findings. The main technical risk is permissive
+data-bit pulse validation; a completed but out-of-spec pulse can be classified
+as data. The public async API also blocks during its delay and pulse polling.
+Test coverage is useful for nominal protocol paths but does not yet verify
+timing boundaries, GPIO failures, or a full transaction on a shared simulated
+timeline. Two documentation findings from this audit were corrected during
+follow-up maintenance; the remaining technical findings are unchanged.
 
-## Historical findings status
+Physically validated platforms, based on developer reports, are Raspberry Pi
+Pico 2 (RP2350) and Seeed XIAO ESP32-C3 (GPIO3). These results demonstrate
+successful operation, not calibration, long-duration stability, or timing
+robustness.
 
-These are the findings from the previous audit, classified against the
-implementation inspected on October 28, 2026:
+## 2. Scope and Methodology
 
-| Previous finding | Status | Current evidence / note |
-|---|---|---|
-| GPIO read errors during polling were reported as protocol timeouts (previous High) | **Partially resolved** | `measure_pulse` and `wait_for_initial_low` now map GPIO read failures to `DhtError::PinError` (`src/driver/mod.rs:77-99,122-140`). The old claim remains in Rustdoc (`src/driver/mod.rs:44-48`, `src/protocol.rs:22-25`); see DHT-04. |
-| An edge observed after a timeout could be accepted (previous Medium) | **Resolved** | Both helpers calculate elapsed time and return on `elapsed > timeout_us` / `elapsed > 120` before accepting the sampled edge (`src/driver/mod.rs:86-99,126-140`). The exact deadline is inclusive: an edge sampled at equality can succeed. Boundary tests do not fully establish this behavior; see DHT-03. |
-| Async `read()` busy-polls synchronously after its start delay (previous Medium) | **Still open** | This remains the implementation behavior. Driver Rustdoc acknowledges synchronous pulse polling, but the RP2350 adapter also implements its async delay using a synchronous HAL delay. See DHT-02. |
-| Full-transaction test does not couple start signal to the simulated waveform (previous Low) | **Still open** | The fake delay and `TimedPin` do not share elapsed time or start/release state (`src/driver/tests.rs:13-58,227-237,607-638`). See DHT-03. |
+### Code and documentation inspected
 
-The earlier report's statements that there was no reported physical validation
-and that polling GPIO failures became timeouts are superseded by this dated
-re-audit. The hardware result remains developer-reported rather than
-independently verified.
+- Core protocol, interfaces, and tests: `crates/ferrum-dht11/src/`,
+  `crates/ferrum-dht11/tests/dht11_integration.rs`, and
+  `crates/ferrum-dht11/Cargo.toml`.
+- RP2350 adapter and example: `platforms/rp2350/src/dht11.rs` and
+  `platforms/rp2350/examples/pico2_dht11.rs`.
+- ESP32-C3 adapter and example: `platforms/esp32/src/dht11.rs` and
+  `platforms/esp32/examples/esp32c3_dht11.rs`.
+- Related documentation: `docs/dht11.md` and
+  `docs/adr/001-platform-oriented-workspaces.md`.
+- GPIO, timer, and clock behavior was checked against the locally resolved
+  `rp235x-hal 0.4.0` and `esp-hal 1.2.2` sources.
 
-## Re-audit — October 28, 2026
+### Automated verification executed
 
-### Findings
+- Results of the current maintenance verification are recorded in Section 6
+  and distinguish the remaining RP2350 linker warning from the corrected
+  ESP32 example warning.
 
-#### DHT-01 — Permissive data-bit pulse validation
+The builds verify compilation, not firmware correctness on target. No
+independent hardware measurement or electrical/timing instrumentation was
+performed for this audit.
+
+### Physical evidence
+
+The RP2350 and ESP32-C3 results below were reported by the developer. The
+ESP32-C3 firmware was reported as release-compiled, flashed, and executed.
+Physical evidence is kept separate from code inspection and automated test
+results in the validation matrix.
+
+## 3. Architecture Assessment
+
+### Core protocol
+
+`Dht11::start_signal()` in `crates/ferrum-dht11/src/driver/mod.rs` drives DATA
+low for 18 ms, awaits the supplied delay, then releases the pin. The core waits
+up to 120 us for the sensor's initial LOW and measures response LOW and HIGH
+pulses with 150 us deadlines, accepting response durations of 50–110 us.
+`read_frame()` reads five bytes, MSB first, and
+`Measurement::from_frame()` checks the wrapping sum of the first four bytes
+against the checksum byte.
+
+For data bits, `read_bit()` measures the LOW pulse but discards its duration.
+It treats any completed HIGH pulse greater than 45 us as `1`; the 100 us
+measurement timeout is not a valid-width check. This leaves the data-bit
+validation less strict than the response handshake. GPIO-operation failures
+are mapped to `DhtError::PinError`, although the concrete adapter error is
+discarded.
+
+### Hardware traits and electrical assumptions
+
+`DhtPin` requires an operation to drive DATA low, release it without actively
+driving HIGH, and sample the line. `MicrosecondClock` must be monotonic,
+advance during synchronous polling, and return consistent microsecond units.
+The core uses wrapping subtraction for elapsed durations; it cannot enforce
+the clock's units or resolution. The asynchronous `DelayNs` starts the host
+signal, but the trait's async signature does not itself guarantee that an
+implementation yields.
+
+Both adapters use open-drain/release behavior and enable input sampling while
+communicating. DATA requires a suitable external or board-level pull-up to a
+voltage safe for both sensor and MCU. Wiring voltage, resistor sizing, and
+board-level electrical integrity are not established by the code or readings.
+
+### RP2350 adapter
+
+`platforms/rp2350/src/dht11.rs` converts the supplied compatible pin to a
+floating SIO input and wraps it in `hal::gpio::InOutPin`. In the resolved HAL,
+`set_low()` enables the low output and `set_high()` disables output drive,
+releasing the line. TIMER0 supplies the clock in ticks; the example initializes
+the HAL timer after clock setup, and the adapter uses the same timer for its
+delay. The adapter's `PicoDelay::delay_ns()` calls the synchronous HAL delay
+inside an async method. GPIO failures are converted to `()`, then to the
+driver's `PinError`.
+
+### ESP32-C3 adapter
+
+`platforms/esp32/src/dht11.rs` owns the input pin through `Flex<'d>`, configures
+open-drain output with no internal pull, enables input sampling, and sets HIGH
+to release DATA. The pin lifetime is tied to the adapter; construction
+consumes the pin, avoiding a second owner. The `esp-hal 1.2.2` `Instant`
+documentation specifies a 1 us timer resolution and a monotonic time since
+boot while awake; it does not advance in sleep mode, which is not used during
+the driver's active polling. `EspDelay::delay_ns()` wraps the synchronous
+`DelayNs` implementation in an async method. The ESP GPIO operations are
+infallible in this adapter and are represented as `Result<_, ()>` to satisfy
+the shared trait.
+
+Both adapters compile against their platform HALs and reuse the same
+hardware-independent protocol. No adapter defect was confirmed by inspection;
+the shared data-pulse validation and blocking behavior apply to both.
+
+## 4. Findings Summary
+
+Priority is independent of severity: **P1** means address in the next focused
+work; **P2** means plan after the P1 items; **P3** means defer unless product
+requirements bring it into scope.
+
+| ID | Severity | Affected components | Status | Recommended priority |
+|---|---|---|---|---|
+| DHT-01 | Medium | Core protocol; both platforms | Open | P1 |
+| DHT-02 | Medium | Core async API; both adapters/examples | Open | P2 |
+| DHT-03 | Low | Core unit and integration tests | Open | P2 |
+| DHT-04 | Low | Core Rustdoc | Resolved | — |
+| DHT-05 | Low | Generic core API; adapters with yielding delays | Open, conditional | P3 |
+| DHT-06 | Low | DHT11 guide and workspace ADR | Resolved | — |
+
+Earlier observations that GPIO polling errors became protocol timeouts and
+that a sampled edge after a timeout could be accepted are resolved in the
+current implementation. Polling GPIO errors map to `PinError`; the timeout
+check precedes acceptance of a sampled edge after the deadline. The exact
+deadline remains inclusive. The stale GPIO-error Rustdoc is tracked separately
+as DHT-04. DHT-04 and DHT-06 are resolved by the documentation changes
+summarized under Resolved findings. Earlier statements that no physical
+validation had been reported are superseded by the developer evidence
+recorded here.
+
+## 5. Detailed Findings
+
+### Resolved findings
+
+#### DHT-04 — GPIO-error Rustdoc contradicted runtime behavior
+
+- **Original issue:** Rustdoc stated that GPIO read failures during polling
+  became timeout/no-response errors, while the implementation returns
+  `DhtError::PinError`.
+- **Corrective action:** Updated the `read()` and `PinError` documentation to
+  state that all GPIO-operation failures map to `PinError` and the generic
+  driver does not retain the underlying platform error.
+- **Files changed:** `crates/ferrum-dht11/src/driver/mod.rs` and
+  `crates/ferrum-dht11/src/protocol.rs`.
+- **Verification:** Inspected the actual GPIO error mapping and reran core
+  formatting, tests, and platform compilation checks; results are in Section
+  6.
+
+#### DHT-06 — User documentation omitted implemented ESP32-C3 support
+
+- **Original issue:** The guide omitted ESP32-C3 and pointed to an obsolete
+  RP2350 example path; ADR-001 described ESP32 integration and validation as
+  pending.
+- **Corrective action:** Added current board, workspace, crate, features,
+  targets, pin, wiring, usage, and runbook link to the guide. Updated ADR-001
+  implementation and developer-reported validation status while preserving
+  its architectural rationale.
+- **Files changed:** `docs/dht11.md` and
+  `docs/adr/001-platform-oriented-workspaces.md`.
+- **Verification:** Checked API snippets and paths against both platform
+  examples and library exports; both platform example builds completed in the
+  current validation (Section 6). No hardware validation was repeated.
+
+### Active findings
+
+### DHT-01 — Permissive data-bit pulse validation
 
 - **Severity:** Medium
-- **Type:** Confirmed protocol-validation weakness
-- **Affected files:** `crates/ferrum-dht11/src/driver/mod.rs:144-154`
-- **Evidence:** `read_bit()` calls `measure_pulse(false, 100, ...)` but discards
-  the measured LOW duration. It then accepts any HIGH duration that ends by
-  the 100 µs timeout and classifies it solely as `high_us > 45`. Thus a
-  malformed but completed 46–100 µs HIGH pulse is accepted as `1`; there is
-  no explicit accepted LOW-width range or distinct valid HIGH-width bands.
-- **Technical impact:** Noise, timing distortion, or malformed transmissions
-  can be interpreted as data rather than rejected. The 8-bit checksum catches
-  many corrupted frames, but is not a guarantee against a checksum collision.
-- **Recommended minimal action:** Validate data LOW and HIGH durations against
-  explicitly chosen DHT11 timing tolerances, preserving a documented
-  threshold/deadline policy. Add tests at each accepted boundary and just
-  outside it. Confirm the selected tolerances against the exact sensor and
-  target before tightening them.
-- **Current status:** Open.
+- **Priority:** P1
+- **Status:** Open
+- **Affected platforms:** RP2350 and ESP32-C3, through the shared core.
+- **Evidence:** `read_bit()` in
+  `crates/ferrum-dht11/src/driver/mod.rs` ignores the measured data LOW
+  duration. It classifies a completed HIGH pulse only by `high_us > 45`, with
+  a 100 us timeout rather than an accepted-width range. Consequently, a
+  completed 46–100 us HIGH pulse is accepted as `1`, and a short HIGH pulse
+  can be accepted as `0`. The response handshake uses explicit duration
+  bounds, but data bits do not.
+- **Impact:** Malformed or timing-distorted pulses can be decoded as payload
+  bits. The checksum detects many corrupt frames, but is not a guarantee
+  against all corruption.
+- **Recommendation:** Select and document tolerances appropriate to the
+  supported DHT11 and target timing, validate both data LOW and HIGH widths,
+  and test each accepted boundary plus values immediately outside it. Confirm
+  tolerance choices on hardware rather than treating the reported readings as
+  timing characterization.
 
-#### DHT-02 — Async API does not yield during RP2350 delay or frame polling
+### DHT-02 — Async read blocks the executor during the transaction
 
 - **Severity:** Medium
-- **Type:** Confirmed scheduling limitation; acceptable for the current
-  single-threaded example
-- **Affected files:** `crates/ferrum-dht11/src/driver/mod.rs:36-75,77-169`;
-  `crates/ferrum-dht11/src/platforms/rp2350.rs:66-73,123-127`
-- **Evidence:** The generic `read()` awaits the start delay, then performs
-  response detection and all 40-bit reads in synchronous loops with no further
-  await points. RP2350 `PicoDelay::delay_ns()` is declared async but directly
-  calls `embedded_hal::delay::DelayNs::delay_ns()` on the timer without
-  awaiting or yielding. The RP2350 read therefore blocks while the 18 ms
-  start delay is performed and while the response/frame is polled.
-- **Technical impact:** A cooperative executor cannot run other tasks during
-  those intervals; in the example, `block_on(sensor.read())` also pauses USB
-  polling for the duration. This does not invalidate the protocol and is
-  likely acceptable for the example's two-second sampling interval, but it is
-  not cooperative async behavior.
-- **Recommended minimal action:** Keep the simple design for the current
-  bare-metal example and make the RP2350 API documentation explicit that the
-  delay and full transaction are blocking. Only pursue a yielding timer or
-  hardware edge-capture implementation if an application has a demonstrated
-  scheduling requirement.
-- **Current status:** Open; a known design tradeoff, not a protocol defect.
+- **Priority:** P2
+- **Status:** Open
+- **Affected platforms:** RP2350 and ESP32-C3; generic core API.
+- **Evidence:** After awaiting the start delay, `read()` in
+  `crates/ferrum-dht11/src/driver/mod.rs` performs response and 40-bit polling
+  in synchronous loops. `PicoDelay::delay_ns()` and `EspDelay::delay_ns()` in
+  the platform adapters call synchronous HAL delays directly, so their
+  futures do not yield during the 18 ms start pulse either. Both examples
+  invoke the API with `block_on()`.
+- **Impact:** An executor cannot schedule other work during the delay or
+  frame polling. In the RP2350 example, USB polling pauses for the duration of
+  the sensor read. This is a scheduling limitation, not a protocol error, and
+  is acceptable for the current two-second sampling examples.
+- **Recommendation:** Keep the simple polling implementation for current
+  use. Document its blocking behavior consistently and pursue a yielding
+  timer or hardware edge capture only if an application requires cooperative
+  scheduling.
 
-#### DHT-03 — Timing tests leave important integration and boundary gaps
+### DHT-03 — Timing and fault-injection test gaps
 
 - **Severity:** Low
-- **Type:** Confirmed test-coverage gap
-- **Affected files:** `crates/ferrum-dht11/src/driver/tests.rs:13-58,227-237,
-  278-290,293-338,607-638`
-- **Evidence:** The fake clock advances only when queried, while `TimedPin`
-  uses a separate transition table; `drive_low()`, `release()`, and the fake
-  delay do not establish the waveform start time. Existing tests cover normal
-  response widths, short response pulses, timeouts, bit zero/one, byte/frame
-  decoding, and checksum unit behavior. They do not inject GPIO read errors,
-  exercise malformed data LOW/HIGH widths, or directly test a pulse edge
-  sampled exactly at and just beyond its timeout. The test named
-  `initial_low_at_timeout_boundary` checks timeout when no LOW has been seen
-  through the boundary, rather than a LOW transition exactly at the boundary.
-- **Technical impact:** These deterministic tests provide useful control-flow
-  coverage but cannot validate the coupling of the 18 ms start signal, pin
-  release, GPIO sampling latency, and timer time. They also would not detect a
-  regression in GPIO-error propagation or the permissive bit-duration checks.
-- **Recommended minimal action:** Extend the existing test model so delay,
-  pin transitions, and clock share one simulated timeline; add focused
-  injected-error and below/at/above-boundary cases. Keep hardware timing
-  validation separate from claims made by these unit tests.
-- **Current status:** Open.
+- **Priority:** P2
+- **Status:** Open
+- **Affected components:** Core tests; both platform adapters lack dedicated
+  adapter tests.
+- **Evidence:** `crates/ferrum-dht11/src/driver/tests.rs` and
+  `crates/ferrum-dht11/tests/dht11_integration.rs` cover nominal handshakes,
+  timeouts, bit decoding, frame assembly, and checksum behavior. The
+  full-transaction test models the delay separately from the pin transition
+  timeline, so it does not verify that start-pulse duration and waveform
+  timing share a clock. There are no injected GPIO-error cases, malformed
+  data-pulse width cases, or direct tests of pulse edges exactly at and just
+  beyond their deadlines. The initial-low boundary test verifies a timeout
+  with no LOW observed through the boundary, not a LOW edge at that boundary.
+- **Impact:** The tests do not catch regressions in GPIO-error propagation or
+  data-width acceptance, and do not establish end-to-end timing behavior of
+  the start signal and sensor waveform.
+- **Recommendation:** Extend the existing test model to share virtual time
+  across delay, pin transitions, and clock. Add GPIO-error and below/at/above
+  deadline cases, including data-bit width boundaries. Keep those test claims
+  distinct from physical timing validation.
 
-#### DHT-04 — GPIO-error Rustdoc contradicts current error propagation
-
-- **Severity:** Low
-- **Type:** Confirmed documentation defect
-- **Affected files:** `crates/ferrum-dht11/src/driver/mod.rs:44-48`;
-  `crates/ferrum-dht11/src/protocol.rs:22-25`
-- **Evidence:** Both docs say GPIO failures during polling are reported as
-  timeout/no-response errors. Current implementations instead use
-  `.map_err(|_| DhtError::PinError)?` in both polling helpers
-  (`src/driver/mod.rs:88,126`). Start-signal GPIO failures also map to
-  `PinError`.
-- **Technical impact:** Users reading API docs can incorrectly diagnose a
-  GPIO failure as a sensor timeout. The runtime error behavior itself is
-  correct here, although `PinError` intentionally does not retain the
-  underlying platform error.
-- **Recommended minimal action:** Update the two stale Rustdoc comments to
-  state that all GPIO-operation failures map to `PinError`, and note that
-  the platform-specific error detail is erased.
-- **Current status:** Open; the runtime portion of the previous High finding
-  is fixed.
-
-#### DHT-05 — Cancellation during a yielding start delay can leave DATA low
+### DHT-05 — Cancellation can leave DATA low with a yielding delay
 
 - **Severity:** Low
-- **Type:** Potential risk for generic adapters; not reproduced with the RP2350
-  adapter
-- **Affected files:** `crates/ferrum-dht11/src/driver/mod.rs:64-75`
-- **Evidence:** `start_signal()` calls `drive_low()` and then awaits the
-  caller-supplied `DelayNs` before calling `release()`. If that delay future
-  yields and the caller drops the enclosing `read()` future while it is
-  pending, there is no cancellation cleanup to release the pin.
-- **Technical impact:** A cancelled read can leave a generic adapter holding
-  the shared DATA line low, preventing subsequent communication until the pin
-  is manually recovered. The RP2350 `PicoDelay` currently performs its delay
-  synchronously within one poll, so this cancellation point is not exposed
-  during that delay in the supplied adapter.
-- **Recommended minimal action:** Document that callers must not cancel while
-  the start signal is active, or add cancellation-safe pin release if the
-  generic driver is intended to support yielding delays and cancellation.
-- **Current status:** Open potential risk; not a confirmed RP2350 defect.
+- **Priority:** P3
+- **Status:** Open, conditional on a yielding delay implementation.
+- **Affected components:** Generic core API; no current platform adapter
+  exposes a cancellation point during the start delay.
+- **Evidence:** `start_signal()` in
+  `crates/ferrum-dht11/src/driver/mod.rs` drives DATA low before awaiting the
+  caller-supplied `DelayNs`; it releases the line only after that await
+  completes. Dropping a pending read during a genuinely yielding delay skips
+  release cleanup. The supplied RP2350 and ESP32-C3 delay adapters perform
+  their delays synchronously in one poll, so this consequence is not
+  demonstrated on those adapters.
+- **Impact:** A generic adapter using a yielding delay could leave the shared
+  line driven low after cancellation, requiring recovery before another
+  transaction.
+- **Recommendation:** Define the generic cancellation contract. If yielding
+  delays are supported with cancellation, release the pin on cancellation
+  through an appropriate design and test it; otherwise document the
+  limitation. Do not treat this as a current platform failure.
 
-### Protocol and implementation assessment
+## 6. Test and Hardware Validation Matrix
 
-- **Start signal and release:** `start_signal()` drives DATA low, awaits
-  `delay_us(18_000)`, then calls `release()` (`src/driver/mod.rs:64-75`).
-  There is no cleanup path if the async delay future is cancelled while DATA
-  is low; the current RP2350 API exposes no cancellation point during its
-  synchronous delay, but a generic caller can supply a genuinely yielding
-  delay. Consider pin-state cleanup only if cancellation is in scope for the
-  generic API.
-- **Handshake and timeouts:** The initial response LOW must be observed by
-  120 µs. Response LOW and HIGH pulse measurements each have 150 µs timeouts
-  and are accepted at 50–110 µs (`src/driver/mod.rs:104-117,122-140`).
-  Deadline checks reject observations after the timeout and accept an edge at
-  equality. GPIO read errors propagate as `PinError`.
-- **Frame acquisition:** The driver reads five bytes, eight bits per byte,
-  MSB first, then validates the wrapping sum of the first four bytes against
-  byte five (`src/driver/mod.rs:144-169`, `src/protocol.rs:45-64`). An
-  incomplete pulse that never ends times out; there is no separate trailing
-  post-frame pulse check. The checksum is the protocol's only payload
-  integrity check.
-- **Error diagnostics:** `DhtError` distinguishes missing/invalid response
-  pulses, bit pulse timeouts, checksum mismatch, and GPIO failure
-  (`src/protocol.rs:3-25`). The generic driver discards the concrete GPIO
-  error value when mapping to `PinError`; the RP2350 HAL adapter's
-  `InOutPin` operations currently return `Ok` for its set/read operations.
-- **Clock contract and overflow:** The core computes elapsed time with
-  `u64::wrapping_sub` (`src/driver/mod.rs:86,126`), suitable for these short
-  intervals as long as the provided monotonic microsecond counter advances
-  during polling. The RP2350 adapter returns `Timer::get_counter().ticks()`
-  without conversion (`src/platforms/rp2350.rs:54-60`); `rp235x-hal 0.4.0`
-  documents a 1 MHz timer tick requirement for `new_timer0`. The example
-  initializes TIMER0 after configuring clocks and watchdog. Applications
-  must preserve that HAL clock setup; the type alone does not encode or check
-  the timer frequency.
+| Platform / evidence type | Result | What it establishes | Limitations |
+|---|---|---|---|
+| Host automated tests | **Verified by execution:** 24 unit tests and 1 integration test passed; 1 Rustdoc test ignored. | Nominal core decoding, selected timeouts, checksum, and simulated complete measurement. | Not real GPIO timing or electrical behavior; test gaps are DHT-03. |
+| Formatting checks | **Verified by execution:** core and RP2350 workspace checks passed; the edited ESP32 example passes direct `rustfmt --check`. | Changed Rust files are formatted. | ESP32 workspace-wide check still reports a pre-existing formatting difference (leading blank line) in `platforms/esp32/src/dht11.rs`; it was left unchanged as outside scope. |
+| RP2350 release compilation | **Verified by execution:** library check and release example build completed for `thumbv8m.main-none-eabihf`. | Adapter and example compile for the requested target. | Linker warns that `.text` address `0x10000124` is not aligned to 8 bytes; `proc-macro-error2 v2.0.1` reports a future-incompatibility warning. No independent flash/run was done in this audit. |
+| RP2350 physical hardware | **Developer-reported:** successful physical DHT11 readings on Raspberry Pi Pico 2. | The reported setup produced readings. | No sequence, duration, instrumentation, calibration, or timing characterization supplied. |
+| ESP32-C3 release compilation | **Verified by execution:** release library check and example build completed against `esp-hal 1.2.2`. | Adapter and example compile for `riscv32imc-unknown-none-elf`. | No compiler warning after removing the unnecessary `mut`; compilation alone does not establish runtime behavior. |
+| ESP32-C3 physical hardware | **Developer-reported:** Seeed XIAO ESP32-C3, GPIO3; firmware release-compiled, flashed, and executed; six consecutive successful readings. | Successful reported operation on that board and pin. | This is not a long-duration stability test, precision calibration, or proof of timing robustness. |
 
-### RP2350 integration and API assessment
+Reported ESP32-C3 readings, in order:
 
-- The public API permits the intended beginner flow,
-  `rp2350::Dht11::new(pins.gpio15, timer)`, followed by `sensor.read().await`.
-  The adapter owns the pin and timer handles, and does not require the user
-  to implement `DhtPin` or understand protocol timing.
-- The constructor accepts a `Pin<I, F, M>` where the pin ID supports SIO input
-  and output, converts it to a floating SIO input, then wraps it in
-  `hal::gpio::InOutPin` (`src/platforms/rp2350.rs:77-109`). Its generic
-  constraints are not hardcoded to GP15; GP15 is simply the example's choice.
-- Inspection of the resolved `rp235x-hal 0.4.0` implementation confirms
-  `InOutPin::new` disables output enable before configuring its internal
-  output-low state; `set_low()` enables the low output and `set_high()`
-  disables the output driver. Thus release is high impedance and does not
-  actively drive HIGH against the sensor. This is HAL behavior verified in
-  the resolved dependency source, not an assumption about the trait name.
-- The RP2350 adapter requires a floating-input pin and external/board-level
-  DATA pull-up. Electrical voltage compatibility, resistor sizing, cable
-  effects, and behavior on alternate compatible pins remain board-level
-  concerns; generic type support does not independently prove a safe
-  electrical connection. Do not pull a non-5-V-tolerant MCU input to 5 V.
-- `DhtTimer` is `Timer<CopyableTimer0>`. The example copies the timer handle
-  for scheduling while the adapter holds copies for its clock and delay
-  (`examples/pico2_dht11.rs:48-63`). `rp235x-hal` documents this timer handle
-  as copyable; the adapter only reads the counter and uses the same TIMER0
-  for its synchronous delay. No overflow or unit conversion defect was
-  identified for the configured 1 MHz timer.
-- The `rp2350` feature gates the optional HAL dependency, while
-  firmware/example dependencies are target-specific
-  (`crates/ferrum-dht11/Cargo.toml:10-39`; root `Cargo.toml:1-18`).
-  The configuration keeps the core crate's normal dependency surface
-  hardware-independent. An ESP32-C3 adapter can implement the existing
-  `DhtPin`, `MicrosecondClock`, and `DelayNs` boundaries without changing
-  protocol code; no additional abstraction is justified now.
+1. 68% RH / 23.8 C
+2. 68% RH / 23.8 C
+3. 67% RH / 23.8 C
+4. 76% RH / 24.1 C
+5. 80% RH / 24.1 C
+6. 83% RH / 24.1 C
 
-### Verification
+### Explicit coverage gaps
 
-Executed on October 28, 2026, with `rustc 1.98.1` and `cargo 1.98.1`:
+- Valid and invalid data-bit LOW/HIGH widths at exact boundaries.
+- GPIO-operation error propagation through start, handshake, and frame reads.
+- A single simulated timeline coupling start delay, pin state, and clock.
+- Hardware pulse capture or other independent timing characterization across
+  both targets.
+- Long-duration reliability, sensor-to-sensor variation, accuracy/calibration,
+  voltage/pull-up variants, and task-scheduling behavior under load.
+- Cancellation behavior for a generic adapter with a genuinely yielding
+  delay.
 
-| Command | Result |
-|---|---|
-| `cargo fmt --all -- --check` | Passed; no formatting differences. |
-| `cargo test -p ferrum-dht11` | Passed; 25 unit tests passed, 0 failed. Rustdoc test: 1 ignored, as intended. |
-| `cargo check -p ferrum-dht11 --features rp2350 --target thumbv8m.main-none-eabihf` | Passed. Warning: `proc-macro-error2 v2.0.1` contains code that may be rejected by a future Rust version. |
-| `cargo build -p ferrum-dht11 --example pico2_dht11 --features rp2350 --target thumbv8m.main-none-eabihf --release` | Passed. Warnings: linker reports `.text` address `0x10000124` is not a multiple of alignment 8; `proc-macro-error2 v2.0.1` future-incompatibility warning. |
+## 7. Recommended Remediation Order
 
-The target and required toolchain were available. The release warning did not
-fail the build, but should be confirmed against the intended firmware image
-and linker layout before treating it as benign. No physical hardware test was
-performed as part of this audit.
+### Medium-term corrections
 
-## Prioritized remediation plan
+1. Add data-pulse width and deadline-boundary tests, then choose and enforce
+   supported timing tolerances based on sensor requirements and measured
+   target behavior (DHT-01, DHT-03).
+2. Improve the virtual test fixture so delay, pin transitions, and clock share
+   one timeline; add GPIO failure injection (DHT-03).
 
-1. **DHT-01 (Medium):** Define and enforce acceptable data pulse widths;
-   include values at and immediately outside each boundary in tests.
-2. **DHT-02 (Medium):** Clarify in RP2350 public Rustdoc that its async
-   operation blocks; retain the current simple implementation unless actual
-   task-scheduling requirements justify a different timing mechanism.
-3. **DHT-03 (Low):** Couple fake delay, GPIO transitions, and time; inject
-   GPIO failures and exercise exact deadline behavior.
-4. **DHT-04 (Low):** Correct stale error-propagation Rustdoc.
-5. **DHT-05 (Low):** Document cancellation constraints or make the start
-   sequence cancellation-safe if generic yielding delays are supported.
-6. Investigate the release linker's alignment warning in the context of the
-   final firmware image; it is a build warning, not a confirmed driver defect.
+### Deferred engineering work
+
+1. Replace or supplement synchronous polling with yielding timing or hardware
+   edge capture only if cooperative scheduling is a demonstrated requirement
+   (DHT-02).
+2. Decide whether cancellation safety is part of the generic API contract;
+   implement and test cleanup only if yielding delays are supported
+   (DHT-05).
+
+## 8. Conclusion
+
+The driver has demonstrated useful early maturity: the shared `no_std` core is
+separated from platform HALs, host protocol tests pass, both platform examples
+compile in release mode, and developers report successful physical readings
+on RP2350 and ESP32-C3. The implementation is not yet fully characterized.
+Data-bit timing acceptance is permissive, its async interfaces block during
+the transaction, and current tests do not cover important timing and fault
+boundaries. The physical reports establish successful readings only; timing
+robustness, long-term stability, calibration, and broader board compatibility
+remain unverified.

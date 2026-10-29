@@ -51,7 +51,11 @@ ferrum-drivers/
 │   │       └── pico2_dht11.rs
 │   └── esp32/
 │       ├── Cargo.toml          # ferrum-esp32
-│       └── src/lib.rs
+│       ├── src/
+│       │   ├── lib.rs
+│       │   └── dht11.rs
+│       └── examples/
+│           └── esp32c3_dht11.rs
 └── docs/
 ```
 
@@ -78,7 +82,9 @@ esp32c3 = ["esp-hal/esp32c3"]
 dht11 = ["dep:ferrum-dht11"]
 ```
 
-The ESP32 DHT11 feature is a planned integration, not yet an implemented adapter.
+The ESP32-C3 DHT11 adapter and firmware example are implemented in the
+independent `platforms/esp32` workspace. They use the shared
+hardware-independent driver and `esp-hal 1.2.2`.
 
 A platform can eventually support multiple sensors without requiring a separate crate for every sensor–MCU combination.
 
@@ -154,12 +160,14 @@ As of October 28, 2026:
 - `ferrum-dht11` has passing host tests.
 - The RP2350 DHT11 adapter and firmware compile successfully.
 - DHT11 measurements have been observed on a physical Raspberry Pi Pico 2.
-- The independent `ferrum-esp32` workspace passes its initial ESP32-C3 dependency check.
-- ESP32-C3 DHT11 integration and hardware validation remain pending.
+- The ESP32-C3 DHT11 adapter and firmware example compile successfully in
+  release mode in the independent `ferrum-esp32` workspace.
+- The developer reports flashing and executing the ESP32-C3 firmware on a
+  Seeed XIAO ESP32-C3 using GPIO3 (board pin D1), with six consecutive
+  successful readings. This is not a long-duration stability test, precision
+  calibration, or proof of timing robustness.
 
 ## Future work
-
-Implement the ESP32-C3 DHT11 adapter using the existing hardware-independent driver, without duplicating the protocol implementation.
 
 Extend platform integrations to other drivers, including nRF24, as their hardware adapters become available.
 

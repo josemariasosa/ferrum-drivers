@@ -43,9 +43,8 @@ where
     ///
     /// Returns [`DhtError::ChecksumMismatch`] for an invalid frame checksum,
     /// protocol-specific errors for missing or out-of-range pulses, and
-    /// [`DhtError::PinError`] when a GPIO operation during the start signal
-    /// fails. Currently, GPIO failures during pulse observation are reported
-    /// as the corresponding timeout/no-response error.
+    /// [`DhtError::PinError`] when any GPIO operation fails. The generic
+    /// driver does not retain the underlying platform-specific GPIO error.
     pub async fn read<D>(&mut self, delay: &mut D) -> Result<Measurement, DhtError>
     where
         D: DelayNs,

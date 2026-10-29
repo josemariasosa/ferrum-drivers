@@ -1,62 +1,81 @@
-# DHT11 Temperature & Humidity Sensor
+# DHT11 Temperature and Humidity Sensor
 
-A lightweight, `no_std` Rust driver for reading temperature and relative humidity from a DHT11 sensor.
+`ferrum-dht11` is a `no_std` driver with a hardware-independent protocol core
+and platform-specific adapters. It is developer-reported as physically
+validated on the platforms listed below; see the [audit](audits/ferrum-dht11.md)
+for the evidence and its limitations.
 
-`ferrum-dht11` separates the sensor protocol from hardware-specific implementations, making it easy to use on supported microcontrollers.
+## Supported platforms
 
-## Supported hardware
+| Board | Platform workspace / crate | Example | DATA pin | Features | Target |
+|---|---|---|---|---|---|
+| Raspberry Pi Pico 2 (RP2350) | `platforms/rp2350` / `ferrum-rp2350` | `examples/pico2_dht11.rs` | GP15 | `dht11` | `thumbv8m.main-none-eabihf` |
+| Seeed XIAO ESP32-C3 | `platforms/esp32` / `ferrum-esp32` | `examples/esp32c3_dht11.rs` | GPIO3 (board pin D1) | `esp32c3,dht11` | `riscv32imc-unknown-none-elf` |
 
-| Platform                     | Status             | Interface     |
-|------------------------------|--------------------|---------------|
-| Raspberry Pi Pico 2 (RP2350) | Tested on hardware | GPIO + TIMER0 |
-
-The RP2350 implementation supports compatible GPIO pins. GPIO15 is used in the example below.
+The ESP32-C3 adapter uses `esp-hal 1.2.2`.
 
 ## Wiring
 
-Connect the DHT11 sensor to your Raspberry Pi Pico 2:
-
-| DHT11 | Pico 2 |
-|---|---|
-| VCC | 3.3V |
-| DATA | GP15 (physical pin 20) |
-| GND | GND |
-
-The DATA line requires a pull-up resistor, typically 4.7–10 kΩ, to 3.3V. Many DHT11 modules already include one.
+For either board, connect sensor VCC to **3.3 V** and sensor GND to board GND
+(common ground). Connect DATA to the board's DATA pin in the table above.
+DATA requires a pull-up to 3.3 V unless the sensor module already includes a
+suitable pull-up. Do not drive an ESP32-C3 GPIO with a 5 V signal.
 
 ## Usage
 
-Enable the RP2350 platform feature in your project's `Cargo.toml`:
+The platform workspaces are independent. From the repository root, build the
+examples with the commands below.
 
-```toml
-[dependencies]
-ferrum-dht11 = { path = "../ferrum-dht11", features = ["rp2350"] }
+### Raspberry Pi Pico 2
+
+```sh
+cd platforms/rp2350
+cargo build \
+  --example pico2_dht11 \
+  --features dht11 \
+  --target thumbv8m.main-none-eabihf \
+  --release
 ```
 
-The path above is an example for a local checkout. Adjust it to match your project structure.
-
-Once the RP2350 clocks, GPIO pins, and TIMER0 have been initialized:
+After initializing the RP2350 GPIO pins and TIMER0, use the platform adapter:
 
 ```rust
-use ferrum_dht11::rp2350::Dht11;
+use ferrum_rp2350::dht11::Dht11;
 
-// Select any compatible GPIO pin.
 let mut sensor = Dht11::new(pins.gpio15, timer);
-
-// Read temperature and humidity.
 let measurement = sensor.read().await?;
-
-let temperature = measurement.temperature_integer;
-let humidity = measurement.humidity_integer;
 ```
 
-The driver configures the GPIO internally, handles the DHT11 communication sequence, and validates the received checksum.
+### Seeed XIAO ESP32-C3
 
-No custom GPIO traits or manual pulse decoding are required.
+```sh
+cd platforms/esp32
+cargo build \
+  --example esp32c3_dht11 \
+  --features esp32c3,dht11 \
+  --target riscv32imc-unknown-none-elf \
+  --release
+```
+
+After ESP32-C3 initialization, GPIO3 is consumed by the adapter. The example
+uses `block_on` to read a measurement:
+
+```rust
+use embassy_futures::block_on;
+use ferrum_esp32::dht11::Dht11;
+
+let mut sensor = Dht11::new(peripherals.GPIO3);
+let measurement = block_on(sensor.read())?;
+```
+
+The current adapters perform blocking timing operations inside the async
+reading API. The DHT11 is a slow sensor; allow at least two seconds between
+reads. For workspace checks, flashing, and monitoring instructions, see the
+[development runbook](runbooks/development.md).
 
 ## Measurements
 
-A successful read returns a `Measurement`:
+A successful read returns four transmitted components:
 
 ```rust
 pub struct Measurement {
@@ -67,51 +86,5 @@ pub struct Measurement {
 }
 ```
 
-For example:
-
-```text
-Humidity: 69.0 % | Temperature: 24.5 C
-```
-
-Use both integer and decimal fields when displaying values. On failure, `read()` returns a `DhtError` rather than an invalid measurement.
-
-The DHT11 is a relatively slow sensor. Allow at least two seconds between readings.
-
-## Raspberry Pi Pico 2 example
-
-A complete working example is available at:
-
-`crates/ferrum-dht11/examples/pico2_dht11.rs`
-
-From the workspace root, compile it with:
-
-```bash
-cargo build -p ferrum-dht11 \
-  --example pico2_dht11 \
-  --features rp2350 \
-  --target thumbv8m.main-none-eabihf \
-  --release
-```
-
-Flash the firmware using your RP2350 flashing tool, then open the USB serial port.
-
-Example output:
-
-```text
-Ferrum DHT11 - RP2350
-Sensor: GPIO15
-Reading every 2 seconds...
-Humidity: 69.0 % | Temperature: 24.5 C
-Humidity: 69.0 % | Temperature: 24.5 C
-Humidity: 69.0 % | Temperature: 24.5 C
-```
-
-The example uses USB CDC to print measurements every two seconds and reports failed readings as warnings.
-
-## Notes
-
-- The library is `no_std` compatible.
-- The generic protocol implementation is hardware-independent.
-- The RP2350 adapter handles GPIO configuration and timer integration.
-- The current RP2350 implementation uses blocking timing operations internally, even though its public reading method is asynchronous.
-- Other microcontrollers can be supported by implementing additional platform adapters.
+Use both integer and decimal components when displaying values. Failed reads
+return a `DhtError`.

@@ -5,6 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Portable, hardware-independent no_std DHT11 temperature and humidity sensor driver."
+readme = "README.md"
+keywords = ["dht11", "embedded", "no-std", "sensor", "async"]
+categories = ["embedded", "no-std", "hardware-support"]
+
+[badges]
+maintenance = { status = "experimental" }
 
 # Hardware-independent driver dependencies
 [dependencies]

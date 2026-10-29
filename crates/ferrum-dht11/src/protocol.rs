@@ -19,10 +19,10 @@ pub enum DhtError {
     /// The sum of the first four frame bytes did not match the checksum byte.
     ChecksumMismatch,
 
-    /// A GPIO operation failed during the start signal.
+    /// A GPIO operation failed during the start signal or sensor polling.
     ///
-    /// GPIO errors encountered while polling the sensor are currently
-    /// reported as protocol timeout/no-response errors instead.
+    /// The generic driver does not retain the underlying platform-specific
+    /// GPIO error.
     PinError,
 }
 

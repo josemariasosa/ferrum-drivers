@@ -5,6 +5,14 @@ edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/josemariasosa/ferrum-drivers"
+description = "RP2350 hardware adapters for Ferrum Drivers."
+readme = "README.md"
+keywords = ["rp2350", "pico-2", "embedded", "no-std", "dht11"]
+categories = ["embedded", "no-std", "hardware-support"]
+exclude = [".cargo/**"]
+
+[badges]
+maintenance = { status = "experimental" }
 
 [workspace]
 resolver = "3"
