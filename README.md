@@ -54,3 +54,17 @@ cargo build \
   --target thumbv8m.main-none-eabihf \
   --release
 ```
+
+
+cargo check \
+  --manifest-path platforms/esp32/Cargo.toml \
+  --lib \
+  --features esp32c3,dht11 \
+  --target riscv32imc-unknown-none-elf
+  --release
+
+cargo build \
+  --example esp32c3_dht11 \
+  --features esp32c3,dht11 \
+  --target riscv32imc-unknown-none-elf \
+  --release

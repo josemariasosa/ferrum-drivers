@@ -7,3 +7,6 @@
 
 #[cfg(not(feature = "esp32c3"))]
 compile_error!("Select an ESP32 chip feature, e.g. `esp32c3`.");
+
+#[cfg(feature = "dht11")]
+pub mod dht11;
