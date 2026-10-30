@@ -26,6 +26,8 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const RADIO_CHANNEL: u8 = 50;
 const RADIO_ADDRESS: [u8; 5] = [0xE7; 5];
 
+const EXPECTED_PAYLOAD: [u8; 8] = *b"FERRUM01";
+
 #[main]
 fn main() -> ! {
     // ---- CLOCKS ----
@@ -108,10 +110,67 @@ fn main() -> ! {
         Err(error) => {
             println!("[FAIL] Radio initialization: {:?}", error);
             println!("State: {:?}", radio.state());
+
+            loop {
+                delay.delay(Duration::from_secs(2));
+            }
         }
     }
 
-    // ---- IDLE ----
+    // ---- START RX ----
+
+    match radio.start_listening(&mut delay) {
+        Ok(()) => {
+            println!("[RX] Listening on channel {}", RADIO_CHANNEL);
+            println!("State: {:?}", radio.state());
+        }
+
+        Err(error) => {
+            println!("[FAIL] Start listening: {:?}", error);
+
+            loop {
+                delay.delay(Duration::from_secs(2));
+            }
+        }
+    }
+
+    // ---- RECEIVE LOOP ----
+
+    let mut buffer = [0u8; 32];
+    let mut rx_count = 0u32;
+
+    loop {
+        match radio.receive(&mut buffer) {
+            Ok(Some(length)) => {
+                rx_count = rx_count.wrapping_add(1);
+
+                let payload = &buffer[..length];
+
+                if payload == EXPECTED_PAYLOAD.as_slice() {
+                    println!("[RX PASS] #{} FERRUM01 ({} bytes)", rx_count, length,);
+                } else {
+                    println!(
+                        "[RX MISMATCH] #{} length={} data={:02X?}",
+                        rx_count, length, payload,
+                    );
+                }
+            }
+
+            Ok(None) => {
+                // RX FIFO empty.
+            }
+
+            Err(error) => {
+                println!("[RX ERROR] {:?}", error);
+                println!("State: {:?}", radio.state());
+
+                // Stop: some errors leave the driver Faulted.
+                break;
+            }
+        }
+
+        delay.delay(Duration::from_millis(1));
+    }
 
     loop {
         delay.delay(Duration::from_secs(2));

@@ -34,6 +34,9 @@ const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
 const RADIO_CHANNEL: u8 = 50;
 const RADIO_ADDRESS: [u8; 5] = [0xE7; 5];
 
+const PAYLOAD: [u8; 8] = *b"FERRUM01";
+const TX_INTERVAL_US: u64 = 2_000_000;
+
 #[hal::entry]
 fn main() -> ! {
     // ---- CLOCKS ----
@@ -58,6 +61,7 @@ fn main() -> ! {
     let mut timer = hal::Timer::new_timer0(pac.TIMER0, &mut pac.RESETS, &clocks);
 
     let mut spi_delay = timer;
+    let schedule_timer = timer;
 
     // ---- GPIO ----
 
@@ -106,6 +110,15 @@ fn main() -> ! {
     // Initialize exactly once.
     // Preserve the result until USB becomes available.
     let init_result = radio.initialize(&config, &mut timer);
+
+    let radio_ready = init_result.is_ok();
+
+    let mut tx_count = 0u32;
+
+    let mut next_tx = schedule_timer
+        .get_counter()
+        .ticks()
+        .wrapping_add(TX_INTERVAL_US);
 
     // ---- USB CDC ----
 
@@ -203,6 +216,38 @@ fn main() -> ! {
                     output.clear();
                     tx_offset = 0;
                     tx_pending = false;
+                }
+            }
+        }
+
+        // ---- PERIODIC RADIO TX ----
+
+        let now = schedule_timer.get_counter().ticks();
+
+        if now.wrapping_sub(next_tx) < u64::MAX / 2 {
+            next_tx = now.wrapping_add(TX_INTERVAL_US);
+
+            if radio_ready {
+                tx_count = tx_count.wrapping_add(1);
+
+                let result = radio.transmit(&PAYLOAD, &mut timer);
+
+                // Do not overwrite pending USB messages.
+                if connected && !tx_pending {
+                    output.clear();
+
+                    match result {
+                        Ok(()) => {
+                            let _ = write!(output, "[TX OK] #{} FERRUM01 (8 bytes)\r\n", tx_count,);
+                        }
+
+                        Err(error) => {
+                            let _ = write!(output, "[TX FAIL] #{} {:?}\r\n", tx_count, error,);
+                        }
+                    }
+
+                    tx_offset = 0;
+                    tx_pending = !output.is_empty();
                 }
             }
         }

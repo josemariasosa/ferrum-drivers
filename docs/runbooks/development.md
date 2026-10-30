@@ -99,6 +99,12 @@ picotool uf2 convert \
   target/thumbv8m.main-none-eabihf/release/examples/pico2_dht11 \
   -t elf \
   firmware/pico2_dht11.uf2
+
+# Radio
+picotool uf2 convert \
+  platforms/rp2350/target/thumbv8m.main-none-eabihf/release/examples/pico2_nrf24 \
+  -t elf \
+  firmware/pico2_nrf24.uf2
 ```
 
 Ensure that the `firmware/` directory exists beforehand.
@@ -239,6 +245,11 @@ cargo build \
   --features dht11 \
   --target thumbv8m.main-none-eabihf \
   --release
+
+
+ls /dev/cu.usbmodem*
+
+screen /dev/cu.usbmodemXXXX 115200
 ```
 
 Run from `platforms/esp32`:
