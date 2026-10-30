@@ -4,12 +4,12 @@ pub enum PayloadError<E> {
     /// Payload length is outside the supported range of 1–32 bytes.
     ///
     /// When returned by [`crate::Nrf24::transmit`], no hardware access has
-    /// occurred and the driver remains usable in RX mode.
+    /// occurred and the driver remains in its previous stable state.
     InvalidLength,
     /// The SPI device failed while writing the payload.
     ///
-    /// During transmission, this is a critical error: RX restoration is
-    /// attempted, but the driver is left faulted even if restoration succeeds.
+    /// During transmission, the previous stable state is restored if possible,
+    /// but the driver is left faulted even if restoration succeeds.
     Spi(E),
 }
 
@@ -44,37 +44,40 @@ pub enum ConfigureError<E> {
 /// Failure while transmitting a payload.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TxError<SpiError, PinError> {
-    /// The radio is not initialized in RX mode, or has faulted.
+    /// The radio is not in Standby or Listening, or has faulted.
     ///
     /// This check does not access hardware or change the current state.
     NotReady,
-    /// SPI failed during transmission or TX/RX mode handling.
+    /// SPI failed during transmission or mode handling.
     ///
-    /// Once TX mode has been entered, this faults the driver even if RX
-    /// restoration succeeds.
+    /// Once TX mode has been entered, the previous stable state is restored
+    /// if possible, but the driver is faulted even if restoration succeeds.
     Spi(SpiError),
     /// A CE GPIO operation failed.
     ///
-    /// Once TX mode has been entered, the driver attempts RX restoration and
-    /// then remains faulted; the physical CE level may be uncertain.
+    /// Once TX mode has been entered, the driver attempts to restore the
+    /// previous stable state and then remains faulted; the physical CE level
+    /// may be uncertain.
     Pin(PinError),
     /// The payload was invalid or could not be loaded into the TX FIFO.
     Payload(PayloadError<SpiError>),
     /// No TX completion status was observed within the bounded poll loop.
     ///
-    /// RX restoration is attempted, then the driver is faulted.
+    /// Restoration of the previous stable state is attempted, then the driver
+    /// is faulted.
     Timeout,
     /// The radio reported `MAX_RT`.
     ///
-    /// RX restoration is attempted, then the driver is faulted. The public
-    /// transmit workflow uses NO_ACK, so automatic retry exhaustion is not
-    /// expected.
+    /// Restoration of the previous stable state is attempted, then the driver
+    /// is faulted. The public transmit workflow uses NO_ACK, so automatic retry
+    /// exhaustion is not expected.
     MaxRetries,
     /// TX completion was reported but the TX FIFO was not empty.
     ///
-    /// RX restoration is attempted, then the driver is faulted.
+    /// Restoration of the previous stable state is attempted, then the driver
+    /// is faulted.
     FifoNotEmpty,
-    /// The RX → TX or TX → RX mode switch failed.
+    /// Entering TX mode or restoring the previous stable mode failed.
     ///
     /// A failed entry switch faults immediately. A failed restoration switch
     /// also faults; if TX had already failed, the original TX error takes
@@ -102,7 +105,8 @@ pub enum InitError<SpiError, PinError> {
 /// Receive errors. Only SPI failures fault the driver.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RxError<SpiError> {
-    /// Initialization has not succeeded, the driver is faulted, or it is not in RX.
+    /// Initialization has not succeeded, the driver is faulted, or it is not
+    /// in Listening.
     ///
     /// No hardware access is performed by this rejection.
     NotReady,
@@ -113,7 +117,7 @@ pub enum RxError<SpiError> {
     BufferTooSmall { required: usize, available: usize },
     /// Width is outside 1–32. The RX FIFO was flushed successfully, discarding
     /// all queued payloads, including any otherwise valid ones. The radio
-    /// remains usable in RX mode.
+    /// remains usable in Listening.
     InvalidPayloadWidth(u8),
     /// SPI failed. The payload may already have been consumed or the buffer
     /// partially written; the radio is marked faulted and the mode unknown.

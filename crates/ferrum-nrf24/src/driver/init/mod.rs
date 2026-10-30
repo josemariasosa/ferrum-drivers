@@ -19,8 +19,8 @@ where
     ///
     /// On success, the radio enters [`RadioState::Standby`] with PWR_UP enabled
     /// and CE low. The transceiver is configured and powered up, but is neither
-    /// transmitting nor listening. Call `start_listening()` to enter RX mode,
-    /// or `transmit()` to send a payload.
+    /// transmitting nor listening. Call [`Self::start_listening`] to enter RX
+    /// mode, or [`Self::transmit`] to send a payload from Standby.
     ///
     /// The caller must allow the supply to stabilize and power-on reset to
     /// complete before initialization. The 2 ms delay assumes the datasheet's

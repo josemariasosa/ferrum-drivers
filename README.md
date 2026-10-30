@@ -55,10 +55,13 @@ compilation, and flashing.
 | Driver | Core implementation | Platform adapters | Physically validated | Status |
 |---|---|---|---|---|
 | [`ferrum-dht11`](crates/ferrum-dht11) | Yes | RP2350, ESP32-C3 | Pico 2, XIAO ESP32-C3 (developer-reported) | Experimental |
-| [`ferrum-nrf24`](crates/ferrum-nrf24) | Placeholder only | None | No | Not yet implemented |
+| [`ferrum-nrf24`](crates/ferrum-nrf24) | Blocking `embedded-hal` 1.0 driver | None | No | Experimental |
 
-`ferrum-nrf24` currently contains only a scaffold crate; it has no radio
-functionality, platform adapters, or hardware validation.
+`ferrum-nrf24` provides synchronous SPI operations, explicit radio lifecycle
+management, polling reception, and no-acknowledgment transmission. It has no
+platform adapters, async backend, or physical hardware validation. See the
+[crate documentation](crates/ferrum-nrf24/README.md) for its supported
+behavior and limitations.
 
 ## Architecture — one protocol, multiple platforms
 

@@ -7,6 +7,10 @@
 //!
 //! [`Nrf24::start_listening`] explicitly enables reception.
 //! [`Nrf24::standby`] stops listening.
+//! The supported lifecycle transitions are Uninitialized → Standby,
+//! Standby → Listening → Standby, and Standby → PowerDown → Standby.
+//! Invalid-state requests are rejected without hardware access. Hardware
+//! failures that leave the radio state uncertain transition to Faulted.
 //!
 //! [`Nrf24::transmit`] sends one payload from Standby or Listening
 //! and restores the previous stable state on success.
@@ -62,6 +66,9 @@
 //!     let mut radio = Nrf24::new(spi, ce);
 //!     radio.initialize(&config, delay).expect("radio initialization");
 //!
+//!     radio
+//!         .start_listening(delay)
+//!         .expect("start listening before receiving");
 //!     radio.transmit(&[0x01, 0x02], delay).expect("transmit");
 //!
 //!     let mut buffer = [0u8; 32];
