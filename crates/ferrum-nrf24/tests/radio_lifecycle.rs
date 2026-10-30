@@ -58,6 +58,7 @@ fn initialization_expectations() -> Vec<SpiTransaction<u8>> {
     e.extend(address_write(0x0A)); // RX_ADDR_P0
     e.extend(address_write(0x10)); // TX_ADDR
     e.extend(register_write(0x1D, 0x05)); // FEATURE
+    e.extend(register_read(0x1D, 0x05)); // FEATURE access probe
     e.extend(register_write(0x1C, 0x01)); // DYNPD
 
     // Read CONFIG, then enable PWR_UP, PRIM_RX and CRC.

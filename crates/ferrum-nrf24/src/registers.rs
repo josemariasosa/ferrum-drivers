@@ -4,6 +4,8 @@
 pub(crate) const R_REGISTER: u8 = 0x00;
 pub(crate) const W_REGISTER: u8 = 0x20;
 pub(crate) const REGISTER_MASK: u8 = 0x1F;
+pub(crate) const ACTIVATE: u8 = 0x50;
+pub(crate) const ACTIVATE_FEATURES: u8 = 0x73;
 
 pub(crate) const R_RX_PL_WID: u8 = 0x60;
 pub(crate) const R_RX_PAYLOAD: u8 = 0x61;

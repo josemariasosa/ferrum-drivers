@@ -25,8 +25,12 @@ where
     /// The caller must allow the supply to stabilize and power-on reset to
     /// complete before initialization. The 2 ms delay assumes the datasheet's
     /// recommended crystal (Ls < 30 mH); it does not replace supply-startup
-    /// sequencing. FIFOs and stale STATUS flags are not cleared, and no
-    /// ACTIVATE fallback is attempted.
+    /// sequencing. FIFOs and stale STATUS flags are not cleared.
+    ///
+    /// FEATURE access is tested by writing and reading back the required
+    /// FEATURE bits. ACTIVATE is sent once only if that probe fails, because
+    /// ACTIVATE toggles feature-register access rather than idempotently
+    /// enabling it.
     ///
     /// [`InitError::NotReady`] leaves the driver and hardware unchanged.
     /// Any attempted initialization that fails during SPI communication,
@@ -264,10 +268,20 @@ where
         self.write_register_bytes(TX_ADDR, &config.address())
             .map_err(ConfigureError::Register)?;
 
-        // 7. Enable Dynamic Payload Length on pipe 0.
-        self.write_register(FEATURE, EN_DPL | EN_DYN_ACK)
+        // ACTIVATE toggles feature-register access. Probe with the desired
+        // value first, and toggle only when the write cannot be read back.
+        let feature = EN_DPL | EN_DYN_ACK;
+        self.write_register(FEATURE, feature)
             .map_err(ConfigureError::Spi)?;
+        if self.read_register(FEATURE).map_err(ConfigureError::Spi)? != feature {
+            self.spi
+                .write(&[ACTIVATE, ACTIVATE_FEATURES])
+                .map_err(ConfigureError::Spi)?;
+            self.write_register(FEATURE, feature)
+                .map_err(ConfigureError::Spi)?;
+        }
 
+        // 7. Enable Dynamic Payload Length on pipe 0.
         self.write_register(DYNPD, DPL_P0)
             .map_err(ConfigureError::Spi)?;
 

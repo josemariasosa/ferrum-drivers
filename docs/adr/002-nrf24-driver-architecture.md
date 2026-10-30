@@ -7,8 +7,8 @@
 ## Context
 
 Ferrum Drivers separates portable protocol drivers from platform-specific
-hardware integrations. The current `ferrum-nrf24` crate is a scaffold; radio
-functionality and platform adapters have not been implemented.
+hardware integrations. This ADR records the architecture and implementation
+history for the portable `ferrum-nrf24` crate.
 
 The migration starting point, `nrf24-driver` in the `metro-simulation-engine`
 workspace, uses `embedded-hal` 1.0 and `no_std` with synchronous SPI. It
@@ -21,6 +21,35 @@ the starting implementation, not commitments for the Ferrum API.
 The objective is to migrate and evolve this driver without coupling the core
 crate to a particular MCU or async executor, while keeping beginner use
 straightforward and advanced radio control explicit.
+
+## Current implementation status (2026-10-30)
+
+The blocking backend is implemented in software. This status does not indicate
+that physical hardware has been validated.
+
+**Implemented:**
+
+- Blocking SPI backend using `embedded-hal` 1.0.
+- Initialization and explicit radio lifecycle with Standby, Listening,
+  PowerDown, and Faulted states.
+- Dynamic RX payload handling.
+- Single-payload `W_TX_PAYLOAD_NOACK` transmission.
+- Successful TX restores the previous stable state.
+- Current fail-stop error policy: once TX mode has been entered, any TX or
+  restoration failure leaves the driver Faulted, even if restoring the prior
+  hardware mode succeeds.
+
+FEATURE access is checked by writing and reading back the configured bits.
+Because ACTIVATE (`0x50, 0x73`) toggles feature-register access, initialization
+sends it once only when the probe fails, then retries the FEATURE write. It
+does not issue ACTIVATE unconditionally.
+
+**Not yet implemented:**
+
+- Async polling backend.
+- Async IRQ backend.
+- Platform-specific integrations.
+- Physical hardware validation.
 
 ## Decision
 
@@ -186,7 +215,8 @@ necessary; do not settle internal details prematurely.
 
 1. **Blocking:** Migrate and stabilize synchronous functionality, implement
    the logical state model and hybrid API, and preserve and extend the
-   existing unit tests.
+   existing unit tests. The blocking backend is implemented and its software
+   checks are performed in the crate; hardware validation remains pending.
 2. **Async Poll:** Add asynchronous SPI and cooperative polling, define
    cancellation safety before async transmission, and validate independently
    from the blocking backend.
@@ -201,4 +231,10 @@ power behavior. Power-consumption claims require measurement, not assumptions.
 
 ## Error-state guarantee
 
-Successful operations must leave the radio in their documented final logical state. Validation failures occurring before hardware I/O must preserve the previous state. If a hardware operation fails and the resulting radio state cannot be reliably established, the driver must transition to Faulted and reject normal operations until explicit recovery. Not every transmission failure necessarily implies Faulted; detailed error classification and recovery policies will be defined during implementation.
+Successful operations must leave the radio in their documented final logical
+state. Validation failures occurring before hardware I/O preserve the previous
+state. In the blocking implementation, hardware-operation failures fault the
+driver when the resulting state cannot be reliably established. Once TX mode
+has been entered, every transmission or restoration failure leaves the driver
+Faulted even if the previous hardware mode was successfully restored; callers
+must establish safe hardware conditions before reusing a faulted instance.
