@@ -140,6 +140,52 @@ where
         }
     }
 
+    /// Powers up the radio from Power Down into Standby-I.
+    ///
+    /// Requires [`RadioState::PowerDown`].
+    /// Preserves the existing register configuration while setting PWR_UP.
+    /// On success, CE remains low and the radio enters [`RadioState::Standby`].
+    ///
+    /// Waits for the radio's power-up settling time before returning.
+    /// Does not start RX or transmit any payload.
+    ///
+    /// Any SPI or GPIO failure transitions the driver to
+    /// [`RadioState::Faulted`].
+    pub fn power_up<D: DelayNs>(
+        &mut self,
+        delay: &mut D,
+    ) -> Result<(), InitError<SPI::Error, CE::Error>> {
+        if self.state != RadioState::PowerDown {
+            return Err(InitError::NotReady);
+        }
+
+        let result = (|| {
+            self.ce.set_low().map_err(InitError::Pin)?;
+
+            let config = self
+                .read_register(CONFIG)
+                .map_err(|e| InitError::Configure(ConfigureError::Spi(e)))?;
+
+            self.write_register(CONFIG, config | PWR_UP)
+                .map_err(|e| InitError::Configure(ConfigureError::Spi(e)))?;
+
+            delay.delay_ms(POWER_UP_DELAY_MS);
+
+            Ok::<(), InitError<SPI::Error, CE::Error>>(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.state = RadioState::Standby;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = RadioState::Faulted;
+                Err(error)
+            }
+        }
+    }
+
     pub(super) fn prepare_rx_standby(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
         self.ce.set_low().map_err(InitError::Pin)?;
 

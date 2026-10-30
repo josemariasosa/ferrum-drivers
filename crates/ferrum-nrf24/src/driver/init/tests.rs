@@ -425,3 +425,73 @@ fn standby_stops_listening() {
     spi.done();
     ce.done();
 }
+
+#[test]
+fn power_up_transitions_from_power_down_to_standby() {
+    let spi = SpiMock::new(&switch_expectations(0x09, 0x0B));
+
+    let ce = PinMock::new(&[PinTransaction::set(PinState::Low)]);
+
+    let mut delay = DelayMock::new(&[DelayTransaction::delay_ms(POWER_UP_DELAY_MS)]);
+
+    let mut radio = Nrf24::new(spi, ce);
+    radio.state = RadioState::PowerDown;
+
+    assert_eq!(radio.power_up(&mut delay), Ok(()));
+    assert_eq!(radio.state(), RadioState::Standby);
+
+    let (mut spi, mut ce) = radio.release();
+
+    spi.done();
+    ce.done();
+    delay.done();
+}
+
+#[test]
+fn power_up_rejects_invalid_states_without_hardware_access() {
+    for state in [
+        RadioState::Uninitialized,
+        RadioState::Standby,
+        RadioState::Listening,
+        RadioState::Faulted,
+    ] {
+        let spi = SpiMock::new(&[]);
+        let ce = PinMock::new(&[]);
+        let mut delay = DelayMock::new(&[]);
+
+        let mut radio = Nrf24::new(spi, ce);
+        radio.state = state;
+
+        assert_eq!(radio.power_up(&mut delay), Err(InitError::NotReady));
+
+        assert_eq!(radio.state(), state);
+
+        let (mut spi, mut ce) = radio.release();
+        spi.done();
+        ce.done();
+        delay.done();
+    }
+}
+
+#[test]
+fn power_up_pin_failure_faults_driver() {
+    let spi = SpiMock::new(&[]);
+
+    let ce = PinMock::new(&[
+        PinTransaction::set(PinState::Low).with_error(MockError::Io(ErrorKind::Other))
+    ]);
+
+    let mut delay = DelayMock::new(&[]);
+    let mut radio = Nrf24::new(spi, ce);
+
+    radio.state = RadioState::PowerDown;
+
+    assert!(matches!(radio.power_up(&mut delay), Err(InitError::Pin(_))));
+
+    assert_eq!(radio.state(), RadioState::Faulted);
+
+    let (mut spi, mut ce) = radio.release();
+    spi.done();
+    ce.done();
+    delay.done();
+}
