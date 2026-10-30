@@ -24,14 +24,16 @@ esp-hal = { version = "1.2.2", default-features = false, features = [
 ] }
 embedded-hal = "1.0"
 embedded-hal-async = "1.0"
+embedded-hal-bus = { version = "0.3", optional = true }
 
 ferrum-dht11 = { path = "../../crates/ferrum-dht11", version = "0.1.0", optional = true }
-
+ferrum-nrf24 = { path = "../../crates/ferrum-nrf24", version = "0.1.0", optional = true }
 
 [features]
 default = []
 esp32c3 = ["esp-hal/esp32c3"]
 dht11 = ["dep:ferrum-dht11"]
+nrf24 = ["dep:ferrum-nrf24", "dep:embedded-hal-bus"]
 
 # ESP32-C3 firmware example
 [target.'riscv32imc-unknown-none-elf'.dev-dependencies]
@@ -53,3 +55,9 @@ name = "esp32c3_dht11"
 path = "examples/esp32c3_dht11.rs"
 test = false
 required-features = ["esp32c3", "dht11"]
+
+[[example]]
+name = "esp32c3_nrf24"
+path = "examples/esp32c3_nrf24.rs"
+test = false
+required-features = ["esp32c3", "nrf24"]
