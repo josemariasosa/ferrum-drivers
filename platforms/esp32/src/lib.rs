@@ -10,3 +10,6 @@ compile_error!("Select an ESP32 chip feature, e.g. `esp32c3`.");
 
 #[cfg(feature = "dht11")]
 pub mod dht11;
+
+#[cfg(feature = "nrf24")]
+pub mod nrf24;
