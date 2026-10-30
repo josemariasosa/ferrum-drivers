@@ -101,6 +101,42 @@ where
         }
     }
 
+    /// Enters Power Down from Standby-I.
+    ///
+    /// Preserves the radio register configuration while powered.
+    /// On success, CE is low and PWR_UP is cleared.
+    ///
+    /// Requires [`RadioState::Standby`].
+    pub fn power_down(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
+        if self.state != RadioState::Standby {
+            return Err(InitError::NotReady);
+        }
+
+        let result = (|| {
+            self.ce.set_low().map_err(InitError::Pin)?;
+
+            let config = self
+                .read_register(CONFIG)
+                .map_err(|e| InitError::Configure(ConfigureError::Spi(e)))?;
+
+            self.write_register(CONFIG, config & !PWR_UP)
+                .map_err(|e| InitError::Configure(ConfigureError::Spi(e)))?;
+
+            Ok::<(), InitError<SPI::Error, CE::Error>>(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.state = RadioState::PowerDown;
+                Ok(())
+            }
+            Err(error) => {
+                self.state = RadioState::Faulted;
+                Err(error)
+            }
+        }
+    }
+
     pub(super) fn prepare_rx_standby(&mut self) -> Result<(), InitError<SPI::Error, CE::Error>> {
         self.ce.set_low().map_err(InitError::Pin)?;
 
@@ -639,5 +675,44 @@ mod tests {
             spi.done();
             ce.done();
         }
+    }
+
+    #[test]
+    fn start_listening_transitions_from_standby() {
+        let spi = SpiMock::new(&[]);
+
+        let ce = PinMock::new(&[PinTransaction::set(PinState::High)]);
+
+        let mut delay = DelayMock::new(&[DelayTransaction::delay_us(RADIO_SETTLING_US)]);
+
+        let mut radio = Nrf24::new(spi, ce);
+        radio.state = RadioState::Standby;
+
+        assert_eq!(radio.start_listening(&mut delay), Ok(()));
+        assert_eq!(radio.state(), RadioState::Listening);
+
+        let (mut spi, mut ce) = radio.release();
+
+        spi.done();
+        ce.done();
+        delay.done();
+    }
+
+    #[test]
+    fn standby_stops_listening() {
+        let spi = SpiMock::new(&[]);
+
+        let ce = PinMock::new(&[PinTransaction::set(PinState::Low)]);
+
+        let mut radio = Nrf24::new(spi, ce);
+        radio.state = RadioState::Listening;
+
+        assert_eq!(radio.standby(), Ok(()));
+        assert_eq!(radio.state(), RadioState::Standby);
+
+        let (mut spi, mut ce) = radio.release();
+
+        spi.done();
+        ce.done();
     }
 }
