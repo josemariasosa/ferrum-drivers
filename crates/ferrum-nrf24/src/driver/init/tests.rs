@@ -195,7 +195,7 @@ fn initialize_inner_leaves_radio_in_standby() {
 
     let mut radio = Nrf24::new(spi, ce);
 
-    assert_eq!(radio.initialize_rx_inner(&config, &mut delay), Ok(()));
+    assert_eq!(radio.initialize_inner(&config, &mut delay), Ok(()));
 
     let (mut spi, mut ce) = radio.release();
 
@@ -223,7 +223,7 @@ fn initialize_rx_does_not_listen_when_verification_fails() {
     let mut radio = Nrf24::new(spi, ce);
 
     assert_eq!(
-        radio.initialize_rx_inner(&config, &mut delay),
+        radio.initialize_inner(&config, &mut delay),
         Err(InitError::VerificationFailed)
     );
 

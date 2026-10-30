@@ -1,12 +1,22 @@
-//! A hardware-independent `no_std` driver for the nRF24L01+ transceiver,
-//! built on [`embedded_hal`] 1.0 SPI-device, GPIO output, and delay traits.
+//! A hardware-independent `no_std` blocking driver for the nRF24L01+
+//! transceiver, built on [`embedded_hal`] 1.0 SPI-device, GPIO output,
+//! and delay traits.
 //!
-//! The supported workflow is receive-first: [`Nrf24::initialize`] configures
-//! pipe 0 and leaves the radio listening. [`Nrf24::transmit`] temporarily
-//! switches RX → TX → RX for one payload, then returns to listening on
-//! success. [`Nrf24::receive`] polls the RX FIFO without waiting for a radio
-//! packet and copies at most one dynamic-length payload into a caller-owned
+//! [`Nrf24::initialize`] configures RX pipe 0 and enters
+//! [`RadioState::Standby`] with CE low.
+//!
+//! [`Nrf24::start_listening`] explicitly enables reception.
+//! [`Nrf24::standby`] stops listening.
+//!
+//! [`Nrf24::transmit`] sends one payload from Standby or Listening
+//! and restores the previous stable state on success.
+//!
+//! [`Nrf24::receive`] polls the RX FIFO without waiting for a packet
+//! and copies at most one dynamic-length payload into a caller-owned
 //! buffer.
+//!
+//! [`Nrf24::power_down`] and [`Nrf24::power_up`] provide explicit
+//! power-management transitions between Standby and PowerDown.
 //!
 //! The driver supports channels 0–125, five-byte addresses, 250 kbit/s,
 //! 1 Mbit/s or 2 Mbit/s, four nominal TX power levels, one-byte CRC, and

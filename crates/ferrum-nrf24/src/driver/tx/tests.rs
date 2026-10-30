@@ -589,3 +589,65 @@ fn restoration_failures_fault_and_preserve_original_tx_error() {
         }
     }
 }
+
+#[test]
+fn transmit_from_standby_restores_standby() {
+    let tx_expectations = [
+        // FLUSH_TX
+        SpiTransaction::transaction_start(),
+        SpiTransaction::write_vec(vec![0xE1]),
+        SpiTransaction::transaction_end(),
+        // Clear STATUS flags.
+        SpiTransaction::transaction_start(),
+        SpiTransaction::transfer_in_place(vec![0x27, 0x30], vec![0x0E, 0x00]),
+        SpiTransaction::transaction_end(),
+        // Write three-byte payload.
+        SpiTransaction::transaction_start(),
+        SpiTransaction::write_vec(vec![0xB0, 0x01, 0x02, 0x03]),
+        SpiTransaction::transaction_end(),
+        // STATUS: TX_DS = 1.
+        SpiTransaction::transaction_start(),
+        SpiTransaction::transfer_in_place(vec![0x07, 0xFF], vec![0x6E, 0x6E]),
+        SpiTransaction::transaction_end(),
+        // FIFO_STATUS: TX_EMPTY = 1.
+        SpiTransaction::transaction_start(),
+        SpiTransaction::transfer_in_place(vec![0x17, 0xFF], vec![0x2E, 0x11]),
+        SpiTransaction::transaction_end(),
+        // Clear TX_DS.
+        SpiTransaction::transaction_start(),
+        SpiTransaction::transfer_in_place(vec![0x27, 0x20], vec![0x2E, 0x00]),
+        SpiTransaction::transaction_end(),
+    ];
+
+    let expectations = [
+        switch_expectations(0x0B, 0x0A),
+        tx_expectations.to_vec(),
+        switch_expectations(0x0A, 0x0B),
+    ]
+    .concat();
+
+    let spi = SpiMock::new(&expectations);
+
+    let ce = PinMock::new(&[
+        PinTransaction::set(State::Low),  // Enter TX
+        PinTransaction::set(State::High), // Pulse CE
+        PinTransaction::set(State::Low),  // End pulse
+        PinTransaction::set(State::Low),  // Restore Standby
+    ]);
+
+    // Only the TX pulse; no RX settling delay.
+    let mut delay = CheckedDelay::new(&[DelayTransaction::delay_us(20)]);
+
+    let mut radio = Nrf24::new(spi, ce);
+    radio.state = RadioState::Standby;
+
+    assert_eq!(radio.transmit(&[0x01, 0x02, 0x03], &mut delay), Ok(()));
+
+    assert_eq!(radio.state(), RadioState::Standby);
+
+    let (mut spi, mut ce) = radio.release();
+
+    spi.done();
+    ce.done();
+    delay.done();
+}

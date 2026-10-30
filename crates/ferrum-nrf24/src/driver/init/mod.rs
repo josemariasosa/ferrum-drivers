@@ -42,7 +42,7 @@ where
             return Err(InitError::NotReady);
         }
 
-        let result = self.initialize_rx_inner(config, delay);
+        let result = self.initialize_inner(config, delay);
 
         match result {
             Ok(()) => {
@@ -214,7 +214,7 @@ where
         Ok(())
     }
 
-    fn initialize_rx_inner<D: DelayNs>(
+    fn initialize_inner<D: DelayNs>(
         &mut self,
         config: &RadioConfig,
         delay: &mut D,
