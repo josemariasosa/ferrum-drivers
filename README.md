@@ -55,13 +55,17 @@ compilation, and flashing.
 | Driver | Core implementation | Platform adapters | Physically validated | Status |
 |---|---|---|---|---|
 | [`ferrum-dht11`](crates/ferrum-dht11) | Yes | RP2350, ESP32-C3 | Pico 2, XIAO ESP32-C3 (developer-reported) | Experimental |
-| [`ferrum-nrf24`](crates/ferrum-nrf24) | Blocking `embedded-hal` 1.0 driver | None | No | Experimental |
+| [`ferrum-nrf24`](crates/ferrum-nrf24) | Blocking `embedded-hal` 1.0 driver | None | Pico 2 W ↔ XIAO ESP32-C3 (developer-reported, documented configuration) | Experimental |
 
 `ferrum-nrf24` provides synchronous SPI operations, explicit radio lifecycle
-management, polling reception, and no-acknowledgment transmission. It has no
-platform adapters, async backend, or physical hardware validation. See the
-[crate documentation](crates/ferrum-nrf24/README.md) for its supported
-behavior and limitations.
+management, polling reception, and no-acknowledgment transmission. Its
+documented physical validation covers radio initialization and bidirectional
+FER–RUM communication on one Pico 2 W / XIAO ESP32-C3 configuration; it does
+not establish long-term reliability or broad radio compatibility. It has no
+platform adapters or async backend. See the
+[crate documentation](crates/ferrum-nrf24/README.md) and
+[nRF24 hardware audit](docs/audits/ferrum-nrf24.md) for details and
+limitations.
 
 ## Architecture — one protocol, multiple platforms
 
@@ -120,6 +124,7 @@ and
 ## Documentation
 
 - [DHT11 — Temperature & Humidity](docs/dht11.md)
+- [nRF24 hardware validation audit](docs/audits/ferrum-nrf24.md)
 - [ADR-001: Platform-Oriented Workspaces](docs/adr/001-platform-oriented-workspaces.md)
 - [Development Runbook](docs/runbooks/development.md)
 - [DHT11 technical audit](docs/audits/ferrum-dht11.md): implementation

@@ -57,7 +57,7 @@ test = false
 required-features = ["esp32c3", "dht11"]
 
 [[example]]
-name = "esp32c3_nrf24"
-path = "examples/esp32c3_nrf24.rs"
+name = "esp32c3_nrf24_driver"
+path = "examples/esp32c3_nrf24_driver.rs"
 test = false
 required-features = ["esp32c3", "nrf24"]

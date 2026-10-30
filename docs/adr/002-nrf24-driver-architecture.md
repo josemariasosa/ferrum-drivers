@@ -24,8 +24,13 @@ straightforward and advanced radio control explicit.
 
 ## Current implementation status (2026-10-30)
 
-The blocking backend is implemented in software. This status does not indicate
-that physical hardware has been validated.
+The blocking backend is implemented in software. Developer-reported physical
+validation now covers initialization on the documented Pico 2 W and XIAO
+ESP32-C3 setup, plus bidirectional sequence-correlated FER–RUM exchanges; the
+evidence and limits are recorded in the
+[nRF24 hardware audit](../audits/ferrum-nrf24.md). This bounded result does not
+establish long-term reliability, broad radio compatibility, or the planned
+platform integrations.
 
 **Implemented:**
 
@@ -49,7 +54,10 @@ does not issue ACTIVATE unconditionally.
 - Async polling backend.
 - Async IRQ backend.
 - Platform-specific integrations.
-- Physical hardware validation.
+
+**Not yet validated:** long-term reliability, broader board/radio compatibility,
+and the full validation criteria for platform wrappers and shared-bus
+composition. No IRQ-based reception has been tested.
 
 ## Decision
 
@@ -216,7 +224,8 @@ necessary; do not settle internal details prematurely.
 1. **Blocking:** Migrate and stabilize synchronous functionality, implement
    the logical state model and hybrid API, and preserve and extend the
    existing unit tests. The blocking backend is implemented and its software
-   checks are performed in the crate; hardware validation remains pending.
+   checks are performed in the crate. Limited physical validation is recorded
+   in the nRF24 audit; it does not replace further hardware validation.
 2. **Async Poll:** Add asynchronous SPI and cooperative polling, define
    cancellation safety before async transmission, and validate independently
    from the blocking backend.
@@ -225,7 +234,8 @@ necessary; do not settle internal details prematurely.
    hardware integration because the current setup does not have IRQ wired.
 
 Existing mock tests do not establish RF delivery or physical compatibility.
-Validate blocking behavior first; test Async Poll and Async IRQ independently.
+The documented FER–RUM exchanges establish delivery only for the tested
+configuration; test Async Poll and Async IRQ independently.
 Hardware-in-the-loop validation is desirable, especially for IRQ, timing, and
 power behavior. Power-consumption claims require measurement, not assumptions.
 

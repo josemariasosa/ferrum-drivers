@@ -3,7 +3,9 @@
 An experimental, hardware-independent `no_std` blocking driver for the
 nRF24L01+ transceiver. It uses synchronous `embedded-hal` 1.0 SPI, GPIO output,
 and delay traits. No platform adapters, async SPI/polling backend, or
-IRQ-driven backend are currently available.
+IRQ-driven backend are currently available. The driver has developer-reported
+physical validation on one documented RP2350 ↔ ESP32-C3 setup; this does not
+establish broad compatibility or long-term reliability.
 
 ## Radio lifecycle
 
@@ -52,7 +54,10 @@ intended architecture; async backends and platform integrations described
 there are planned, not implemented.
 
 Tests use mocked HAL interactions; they do not establish physical-radio
-compatibility or over-the-air delivery. The driver is experimental and has not
-been physically validated.
+compatibility or over-the-air delivery. Physical initialization and
+bidirectional FER–RUM results for the tested boards and wiring are recorded in
+the [nRF24 hardware audit](../../docs/audits/ferrum-nrf24.md). Other radio
+configurations, exhaustive delivery rates, and long-term reliability remain
+unverified.
 
 Licensed under `MIT OR Apache-2.0`; see `LICENSE-MIT` and `LICENSE-APACHE`.

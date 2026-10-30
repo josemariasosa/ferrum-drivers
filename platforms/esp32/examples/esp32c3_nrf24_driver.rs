@@ -1,9 +1,16 @@
+//! FER-RUM bidirectional example using the portable nRF24 driver.
+//!
+//! Demonstrates direct ferrum-nrf24 integration on ESP32-C3.
+//! SPI, GPIO, chip select, and delays are configured explicitly.
+//!
+//! This example implements the FER-RUM responder role.
+//! See esp32c3_nrf24_platform.rs for the future ready-to-use API.
+
 #![no_std]
 #![no_main]
 
 use esp_backtrace as _;
 
-use embedded_hal::spi::SpiDevice;
 use embedded_hal_bus::spi::ExclusiveDevice;
 
 use esp_hal::{
@@ -26,7 +33,32 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const RADIO_CHANNEL: u8 = 50;
 const RADIO_ADDRESS: [u8; 5] = [0xE7; 5];
 
-const EXPECTED_PAYLOAD: [u8; 8] = *b"FERRUM01";
+// ---- FER-RUM PROTOCOL ----
+
+const PROTOCOL_VERSION: u8 = 1;
+const FER: u8 = 0x01;
+const RUM: u8 = 0x02;
+const FRAME_LEN: usize = 6;
+
+const RESPONSE_DELAY_MS: u64 = 10;
+
+fn decode_fer(frame: &[u8]) -> Option<u32> {
+    if frame.len() != FRAME_LEN || frame[0] != FER || frame[5] != PROTOCOL_VERSION {
+        return None;
+    }
+
+    Some(u32::from_le_bytes([frame[1], frame[2], frame[3], frame[4]]))
+}
+
+fn encode_rum(sequence: u32) -> [u8; FRAME_LEN] {
+    let mut frame = [0u8; FRAME_LEN];
+
+    frame[0] = RUM;
+    frame[1..5].copy_from_slice(&sequence.to_le_bytes());
+    frame[5] = PROTOCOL_VERSION;
+
+    frame
+}
 
 #[main]
 fn main() -> ! {
@@ -62,34 +94,7 @@ fn main() -> ! {
 
     // ---- SPI DEVICE ----
 
-    let mut spi = ExclusiveDevice::new(spi_bus, csn, Delay::new()).unwrap();
-
-    // ---- RAW SPI DIAGNOSTIC ----
-
-    // NOP returns the nRF24 STATUS register.
-    let mut status = [0xFF];
-    spi.transfer_in_place(&mut status).unwrap();
-
-    println!("SPI STATUS: 0x{:02X}", status[0]);
-
-    // R_REGISTER RF_CH (register address 0x05).
-    // The second byte contains the channel value.
-    let mut channel = [0x05, 0xFF];
-    spi.transfer_in_place(&mut channel).unwrap();
-
-    println!(
-        "SPI RF_CH: STATUS=0x{:02X}, VALUE=0x{:02X}",
-        channel[0], channel[1],
-    );
-
-    // R_REGISTER CONFIG (register address 0x00).
-    let mut config_reg = [0x00, 0xFF];
-    spi.transfer_in_place(&mut config_reg).unwrap();
-
-    println!(
-        "SPI CONFIG: STATUS=0x{:02X}, VALUE=0x{:02X}",
-        config_reg[0], config_reg[1],
-    );
+    let spi = ExclusiveDevice::new(spi_bus, csn, Delay::new()).unwrap();
 
     // ---- PORTABLE DRIVER ----
 
@@ -134,37 +139,54 @@ fn main() -> ! {
         }
     }
 
-    // ---- RECEIVE LOOP ----
+    // ---- FER-RUM RESPONDER ----
 
     let mut buffer = [0u8; 32];
-    let mut rx_count = 0u32;
+    let mut received = 0u32;
+    let mut responded = 0u32;
+
+    println!("[FER-RUM] Responder ready");
 
     loop {
         match radio.receive(&mut buffer) {
             Ok(Some(length)) => {
-                rx_count = rx_count.wrapping_add(1);
-
                 let payload = &buffer[..length];
 
-                if payload == EXPECTED_PAYLOAD.as_slice() {
-                    println!("[RX PASS] #{} FERRUM01 ({} bytes)", rx_count, length,);
+                if let Some(sequence) = decode_fer(payload) {
+                    received = received.wrapping_add(1);
+
+                    println!("[FER] seq={} received (total={})", sequence, received,);
+
+                    // Allow initiator time to return to RX.
+                    delay.delay(Duration::from_millis(RESPONSE_DELAY_MS));
+
+                    let response = encode_rum(sequence);
+
+                    match radio.transmit(&response, &mut delay) {
+                        Ok(()) => {
+                            responded = responded.wrapping_add(1);
+
+                            println!("[RUM TX] seq={} (total={})", sequence, responded,);
+                        }
+
+                        Err(error) => {
+                            println!("[TX ERROR] seq={} {:?}", sequence, error,);
+                            println!("State: {:?}", radio.state());
+                            break;
+                        }
+                    }
                 } else {
-                    println!(
-                        "[RX MISMATCH] #{} length={} data={:02X?}",
-                        rx_count, length, payload,
-                    );
+                    println!("[INVALID FER] length={} data={:02X?}", length, payload,);
                 }
             }
 
             Ok(None) => {
-                // RX FIFO empty.
+                // No packet available.
             }
 
             Err(error) => {
                 println!("[RX ERROR] {:?}", error);
                 println!("State: {:?}", radio.state());
-
-                // Stop: some errors leave the driver Faulted.
                 break;
             }
         }

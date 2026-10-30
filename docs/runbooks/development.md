@@ -102,9 +102,14 @@ picotool uf2 convert \
 
 # Radio
 picotool uf2 convert \
-  platforms/rp2350/target/thumbv8m.main-none-eabihf/release/examples/pico2_nrf24 \
+  platforms/rp2350/target/thumbv8m.main-none-eabihf/release/examples/pico2_nrf24_driver \
   -t elf \
-  firmware/pico2_nrf24.uf2
+  firmware/pico2_nrf24_driver.uf2
+
+
+ls /dev/cu.usbmodem*
+
+screen /dev/cu.usbmodemXXXX 115200
 ```
 
 Ensure that the `firmware/` directory exists beforehand.
@@ -124,6 +129,38 @@ Ensure that the `firmware/` directory exists beforehand.
 Open the USB CDC serial port with a compatible serial monitor.
 
 The example reports temperature and relative humidity at approximately two-second intervals.
+
+### 3.6 Build and flash the nRF24 driver example
+
+This is a low-level example that uses `ferrum-nrf24` directly. It configures
+SPI0 at 1 MHz, Mode 0, with SCK=GP18, MOSI=GP19, MISO=GP16, CSN=GP21, and
+CE=GP20. See the [nRF24 hardware audit](../audits/ferrum-nrf24.md) for the
+validated two-board wiring and communication results.
+
+Working directory: `platforms/rp2350`.
+
+```bash
+cargo build \
+  --example pico2_nrf24_driver \
+  --features nrf24 \
+  --target thumbv8m.main-none-eabihf \
+  --release
+```
+
+From the repository root, convert the ELF to UF2:
+
+```bash
+picotool uf2 convert \
+  platforms/rp2350/target/thumbv8m.main-none-eabihf/release/examples/pico2_nrf24_driver \
+  -t elf \
+  firmware/pico2_nrf24_driver.uf2
+```
+
+Put the Pico 2 W into BOOTSEL mode and copy `firmware/pico2_nrf24_driver.uf2`
+to its `RP2350` mass-storage volume. Connect a USB CDC serial monitor at
+115200 baud. During the FER–RUM example startup, the reported state next to
+`[PASS] Radio initialized` is queried after `start_listening()`, so it reads
+`Listening`; `initialize()` itself leaves the radio in `Standby`.
 
 ## 4. Seeed XIAO ESP32-C3
 
@@ -222,6 +259,41 @@ Select exactly one transport feature, such as `jtag-serial`, and disable incompa
 
 Enable `println` alongside `panic-handler`.
 
+### 4.6 Build, flash, and monitor the nRF24 driver example
+
+This low-level example uses `ferrum-nrf24` directly and configures SPI2 at
+1 MHz, Mode 0. The validated XIAO board-label-to-GPIO mapping is documented
+in the [nRF24 hardware audit](../audits/ferrum-nrf24.md); do not substitute
+conventional SPI pins for that tested wiring.
+
+Working directory: `platforms/esp32`.
+
+Build only:
+
+```bash
+cargo build \
+  --example esp32c3_nrf24_driver \
+  --features esp32c3,nrf24 \
+  --target riscv32imc-unknown-none-elf \
+  --release
+```
+
+To flash and monitor, run the configured `espflash` runner:
+
+```bash
+cargo run \
+  --example esp32c3_nrf24_driver \
+  --features esp32c3,nrf24 \
+  --target riscv32imc-unknown-none-elf \
+  --release
+```
+
+The runner is configured in `.cargo/config.toml` as
+`espflash flash --monitor --chip esp32c3`. The final example prints the
+initialization result and then its Listening/responder status. Raw
+`SPI STATUS`, `RF_CH`, and `CONFIG` register reads shown in the bring-up
+record were temporary diagnostics and are not part of the final example.
+
 ## 5. Full validation checklist
 
 Run from the repository root:
@@ -246,10 +318,6 @@ cargo build \
   --target thumbv8m.main-none-eabihf \
   --release
 
-
-ls /dev/cu.usbmodem*
-
-screen /dev/cu.usbmodemXXXX 115200
 ```
 
 Run from `platforms/esp32`:

@@ -46,7 +46,7 @@ test = false
 required-features = ["dht11"]
 
 [[example]]
-name = "pico2_nrf24"
-path = "examples/pico2_nrf24.rs"
+name = "pico2_nrf24_driver"
+path = "examples/pico2_nrf24_driver.rs"
 test = false
 required-features = ["nrf24"]
