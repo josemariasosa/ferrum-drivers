@@ -1,5 +1,9 @@
 {
     "rust-analyzer.cargo.target": null,
     "rust-analyzer.check.targets": null,
-    "rust-analyzer.check.workspace": false
+    "rust-analyzer.check.workspace": false,
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    }
 }

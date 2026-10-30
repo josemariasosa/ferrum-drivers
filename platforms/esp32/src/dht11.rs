@@ -1,4 +1,3 @@
-
 //! DHT11 hardware adapter for Espressif microcontrollers.
 
 use embedded_hal::delay::DelayNs as SyncDelayNs;
