@@ -64,7 +64,7 @@ required-features = ["esp32c3", "nrf24"]
 
 [[example]]
 name = "esp32c3_nrf24_composable"
-path = "examples/esp32c3_nrf24.rs_composable"
+path = "examples/esp32c3_nrf24_composable.rs"
 test = false
 required-features = ["esp32c3", "nrf24"]
 

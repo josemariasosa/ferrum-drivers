@@ -18,8 +18,8 @@ use esp_hal::{
     gpio::{Level, Output, OutputConfig},
     main,
     spi::{
-        master::{Config as SpiConfig, Spi},
         Mode,
+        master::{Config as SpiConfig, Spi},
     },
     time::{Duration, Rate},
 };

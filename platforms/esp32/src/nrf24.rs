@@ -1,18 +1,29 @@
 //! ESP32 blocking integration for the portable nRF24L01+ driver.
 //!
-//! Accepts an externally configured SPI device and CE pin.
-//! Owns the delay provider required by the portable driver.
-//!
-//! This module does not configure SPI pins or chip select.
-//! Those responsibilities belong to the caller when using
-//! `from_spi_device`.
+//! Supports both externally configured SPI devices and a ready-to-use SPI
+//! master configuration. The wrapper owns the delay provider required by the
+//! portable driver; the ready-to-use path also owns its configured SPI device,
+//! CSN, and CE pins.
 
 use embedded_hal::{digital::OutputPin, spi::SpiDevice};
 
-use esp_hal::delay::Delay;
+use esp_hal::{
+    Blocking,
+    delay::Delay,
+    gpio::{
+        Level, Output, OutputConfig, OutputPin as GpioOutputPin,
+        interconnect::{PeripheralInput, PeripheralOutput},
+    },
+    spi::{
+        Mode,
+        master::{Config as SpiConfig, ConfigError, Instance, Spi},
+    },
+    time::Rate,
+};
 
 pub use ferrum_nrf24::{DataRate, InitError, RadioConfig, RadioState, RxError, TxError, TxPower};
 
+use embedded_hal_bus::spi::ExclusiveDevice;
 use ferrum_nrf24::Nrf24 as PortableNrf24;
 
 /// Blocking nRF24 integration for ESP32.
@@ -91,5 +102,42 @@ where
     /// Does not reset or power down the physical radio.
     pub fn release(self) -> (SPI, CE) {
         self.inner.release()
+    }
+}
+
+impl<'d> Nrf24<ExclusiveDevice<Spi<'d, Blocking>, Output<'d>, Delay>, Output<'d>> {
+    /// Configure an SPI master and GPIO pins for an nRF24 radio.
+    ///
+    /// SPI runs at 1 MHz in Mode 0. CSN starts high and CE starts low.
+    /// This configures the hardware but does not initialize the radio.
+    ///
+    /// The SPI peripheral and pin parameters follow ESP-HAL's peripheral
+    /// capabilities, so compatible SPI peripherals and GPIO pins can be used.
+    pub fn new(
+        spi: impl Instance + 'd,
+        sck: impl PeripheralOutput<'d>,
+        mosi: impl PeripheralOutput<'d>,
+        miso: impl PeripheralInput<'d>,
+        csn: impl GpioOutputPin + 'd,
+        ce: impl GpioOutputPin + 'd,
+    ) -> Result<Self, ConfigError> {
+        let spi_config = SpiConfig::default()
+            .with_frequency(Rate::from_mhz(1))
+            .with_mode(Mode::_0);
+
+        let spi_bus = Spi::new(spi, spi_config)?
+            .with_sck(sck)
+            .with_mosi(mosi)
+            .with_miso(miso);
+
+        let csn = Output::new(csn, Level::High, OutputConfig::default());
+        let ce = Output::new(ce, Level::Low, OutputConfig::default());
+
+        let spi_device = match ExclusiveDevice::new(spi_bus, csn, Delay::new()) {
+            Ok(device) => device,
+            Err(error) => match error {},
+        };
+
+        Ok(Self::from_spi_device(spi_device, ce))
     }
 }
