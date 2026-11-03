@@ -25,6 +25,7 @@ rp235x-hal = { version = "0.4", default-features = false }
 embedded-hal = "1.0"
 embedded-hal-async = "1.0"
 embedded-hal-bus = { version = "0.3", optional = true }
+rf24 = { package = "rf24-rs", git = "https://github.com/nRF24/rf24-rs", rev = "5052379", optional = true, default-features = false }
 
 # RP2350 firmware example
 [target.'thumbv8m.main-none-eabihf'.dev-dependencies]
@@ -38,6 +39,7 @@ rp235x-hal = { version = "0.4", features = ["rt", "critical-section-impl"] }
 default = []
 dht11 = ["dep:ferrum-dht11"]
 nrf24 = ["dep:ferrum-nrf24", "dep:embedded-hal-bus"]
+rf24-external = ["dep:rf24", "dep:embedded-hal-bus"]
 
 [[example]]
 name = "pico2_dht11"
@@ -50,3 +52,9 @@ name = "pico2_nrf24_driver"
 path = "examples/pico2_nrf24_driver.rs"
 test = false
 required-features = ["nrf24"]
+
+[[example]]
+name = "pico2_rf24_external"
+path = "examples/pico2_rf24_external.rs"
+test = false
+required-features = ["rf24-external"]

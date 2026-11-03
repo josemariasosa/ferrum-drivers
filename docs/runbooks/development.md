@@ -106,6 +106,10 @@ picotool uf2 convert \
   -t elf \
   firmware/pico2_nrf24_driver.uf2
 
+picotool uf2 convert \
+  platforms/rp2350/target/thumbv8m.main-none-eabihf/release/examples/pico2_rf24_external \
+  -t elf \
+  firmware/pico2_rf24_external.uf2
 
 ls /dev/cu.usbmodem*
 

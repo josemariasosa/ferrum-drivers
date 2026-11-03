@@ -63,6 +63,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d7e60934ceec538daadb9d8432424ed043a904d8e0243f3c6446bce549a46ac"
 
 [[package]]
+name = "bitfield-struct"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2869c63ccf4f8bf0d485070b880e60e097fb7aeea80ee82a0a94a957e372a0b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -299,6 +310,7 @@ dependencies = [
  "ferrum-dht11",
  "ferrum-nrf24",
  "heapless",
+ "rf24-rs",
  "rp235x-hal",
  "usb-device",
  "usbd-serial",
@@ -740,6 +752,15 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rf24-rs"
+version = "0.3.1"
+source = "git+https://github.com/nRF24/rf24-rs?rev=5052379#5052379b5ca38fd3c708a11a48f2df14280c90d9"
+dependencies = [
+ "bitfield-struct",
+ "embedded-hal 1.0.0",
+]
 
 [[package]]
 name = "riscv"
