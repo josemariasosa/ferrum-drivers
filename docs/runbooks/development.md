@@ -155,9 +155,9 @@ From the repository root, convert the ELF to UF2:
 
 ```bash
 picotool uf2 convert \
-  platforms/rp2350/target/thumbv8m.main-none-eabihf/release/examples/pico2_nrf24_driver \
+  target/thumbv8m.main-none-eabihf/release/examples/pico2_nrf24_driver \
   -t elf \
-  firmware/pico2_nrf24_driver.uf2
+  ../../firmware/pico2_nrf24_driver.uf2
 ```
 
 Put the Pico 2 W into BOOTSEL mode and copy `firmware/pico2_nrf24_driver.uf2`

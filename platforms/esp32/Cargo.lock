@@ -29,6 +29,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitfield-struct"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2869c63ccf4f8bf0d485070b880e60e097fb7aeea80ee82a0a94a957e372a0b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -753,6 +764,7 @@ dependencies = [
  "esp-println",
  "ferrum-dht11",
  "ferrum-nrf24",
+ "rf24-rs",
 ]
 
 [[package]]
@@ -1066,6 +1078,15 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rf24-rs"
+version = "0.3.1"
+source = "git+https://github.com/nRF24/rf24-rs?rev=5052379#5052379b5ca38fd3c708a11a48f2df14280c90d9"
+dependencies = [
+ "bitfield-struct",
+ "embedded-hal 1.0.0",
+]
 
 [[package]]
 name = "riscv"

@@ -64,3 +64,14 @@ Expected serial output:
 ```
 
 This confirms initialization, TX/RX transitions, and successful bidirectional communication between the two driver implementations.
+
+
+## ESP32-C3
+
+cd ~/metro/ferrum-drivers/platforms/esp32
+
+cargo build \
+  --target riscv32imc-unknown-none-elf \
+  --features esp32c3,rf24-external \
+  --example esp32c3_rf24_external \
+  --release

@@ -295,8 +295,6 @@ fn main() -> ! {
             continue;
         }
 
-        let now = schedule_timer.get_counter().ticks();
-
         // ---- RECEIVE RUM ----
 
         if waiting_for_rum {
