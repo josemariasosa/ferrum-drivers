@@ -1,10 +1,14 @@
-//! FER-RUM bidirectional example using the portable nRF24 driver.
+//! FER-RUM initiator using the external `rf24-rs` driver on RP2350.
 //!
-//! Demonstrates direct ferrum-nrf24 integration on ESP32-C3.
-//! SPI, GPIO, chip select, and delays are configured explicitly.
+//! Runs on a Raspberry Pi Pico 2 W with an nRF24L01+ transceiver.
+//! Uses explicit embedded-hal SPI and GPIO configuration.
 //!
-//! This example implements the FER-RUM responder role.
-//! See esp32c3_nrf24_platform.rs for the future ready-to-use API.
+//! Exchanges FER/RUM frames with an ESP32-C3 responder.
+//! Uses 1 Mbps, channel 50, 8-bit CRC, dynamic payloads, and NO_ACK.
+//!
+//! USB CDC reports initialization, transmission, and response results.
+//!
+//! Intended as a reproducible hardware integration example for rf24-rs.
 
 #![no_std]
 #![no_main]
@@ -307,7 +311,27 @@ fn main() -> ! {
 
         // ---- RECEIVE RUM ----
 
-        if waiting_for_rum && radio.available().unwrap() {
+        let available = if waiting_for_rum {
+            match radio.available() {
+                Ok(available) => available,
+                Err(error) => {
+                    radio_ready = false;
+
+                    if connected && !tx_pending {
+                        output.clear();
+                        let _ = write!(output, "[RX ERROR] available(): {:?}\r\n", error);
+                        tx_offset = 0;
+                        tx_pending = !output.is_empty();
+                    }
+
+                    continue;
+                }
+            }
+        } else {
+            false
+        };
+
+        if available {
             match radio.read(&mut rx_buffer, None) {
                 Ok(length) => {
                     let payload = &rx_buffer[..usize::from(length)];
@@ -412,9 +436,27 @@ fn main() -> ! {
 
             let frame = encode_fer(sequence);
 
-            radio.as_tx(None).unwrap();
+            // Enter TX mode.
+            if let Err(error) = radio.as_tx(None) {
+                radio_ready = false;
 
-            match radio.send(&frame, true) {
+                if connected && !tx_pending {
+                    output.clear();
+                    let _ = write!(output, "[TX MODE ERROR] {:?}\r\n", error);
+                    tx_offset = 0;
+                    tx_pending = !output.is_empty();
+                }
+
+                continue;
+            }
+
+            // Transmit without acknowledgment.
+            let tx_result = radio.send(&frame, true);
+
+            // Always attempt to restore RX mode after transmission.
+            let rx_result = radio.as_rx();
+
+            match tx_result {
                 Ok(true) => {
                     waiting_for_rum = true;
 
@@ -425,31 +467,56 @@ fn main() -> ! {
 
                     if connected && !tx_pending {
                         output.clear();
-
-                        let _ = write!(output, "[FER TX] seq={}\r\n", sequence,);
-
+                        let _ = write!(output, "[FER TX] seq={}\r\n", sequence);
                         tx_offset = 0;
                         tx_pending = !output.is_empty();
                     }
                 }
+
                 Ok(false) => {
-                    // TX no completado satisfactoriamente
+                    consecutive_timeouts = consecutive_timeouts.saturating_add(1);
+
+                    if connected && !tx_pending {
+                        output.clear();
+                        let _ = write!(
+                            output,
+                            "[TX FAILED] FER seq={} ({}/3)\r\n",
+                            sequence, consecutive_timeouts,
+                        );
+                        tx_offset = 0;
+                        tx_pending = !output.is_empty();
+                    }
+
+                    sequence = sequence.wrapping_add(1);
+
+                    if consecutive_timeouts >= 3 {
+                        radio_ready = false;
+                    }
                 }
+
                 Err(error) => {
                     radio_ready = false;
 
                     if connected && !tx_pending {
                         output.clear();
-
                         let _ = write!(output, "[TX ERROR] seq={} {:?}\r\n", sequence, error,);
-
                         tx_offset = 0;
                         tx_pending = !output.is_empty();
                     }
                 }
             }
 
-            radio.as_rx().unwrap();
+            // Check whether RX mode was restored successfully.
+            if let Err(error) = rx_result {
+                radio_ready = false;
+
+                if connected && !tx_pending {
+                    output.clear();
+                    let _ = write!(output, "[RX MODE ERROR] {:?}\r\n", error);
+                    tx_offset = 0;
+                    tx_pending = !output.is_empty();
+                }
+            }
         }
     }
 }
