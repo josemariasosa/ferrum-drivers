@@ -19,6 +19,10 @@ picotool uf2 convert \
   target/thumbv8m.main-none-eabihf/release/examples/pico2_rf24_external \
   -t elf \
   ../../firmware/pico2_rf24_external.uf2
+
+ls /dev/cu.usbmodem*
+
+screen /dev/cu.usbmodemXXXX 115200
 ```
 
 Flash the UF2 file onto the Pico 2 W using BOOTSEL mode, or an appropriate flashing tool.
