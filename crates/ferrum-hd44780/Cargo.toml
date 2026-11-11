@@ -1,0 +1,20 @@
+[package]
+name = "ferrum-hd44780"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portable no_std HD44780-compatible character LCD driver for embedded Rust."
+readme = "README.md"
+keywords = ["hd44780", "lcd", "embedded", "no-std", "gpio"]
+categories = ["embedded", "no-std", "hardware-support"]
+
+[badges]
+maintenance = { status = "experimental" }
+
+[dependencies]
+embedded-hal = { workspace = true }
+
+[dev-dependencies]
+embedded-hal-mock = "0.11"

@@ -29,13 +29,16 @@ embedded-hal-bus = { version = "0.3", optional = true }
 ferrum-dht11 = { path = "../../crates/ferrum-dht11", version = "0.1.0", optional = true }
 ferrum-nrf24 = { path = "../../crates/ferrum-nrf24", version = "0.1.0", optional = true }
 rf24 = { package = "rf24-rs", git = "https://github.com/nRF24/rf24-rs", rev = "5052379", optional = true, default-features = false }
+ferrum-hd44780 = { path = "../../crates/ferrum-hd44780", version = "0.1.0", optional = true }
 
 [features]
 default = []
 esp32c3 = ["esp-hal/esp32c3"]
+esp32s3 = ["esp-hal/esp32s3"]
 dht11 = ["dep:ferrum-dht11"]
 nrf24 = ["dep:ferrum-nrf24", "dep:embedded-hal-bus"]
 rf24-external = ["dep:rf24", "dep:embedded-hal-bus"]
+hd44780 = ["dep:ferrum-hd44780"]
 
 # ESP32-C3 firmware example
 [target.'riscv32imc-unknown-none-elf'.dev-dependencies]
@@ -49,6 +52,20 @@ esp-backtrace = { version = "0.20", default-features = false, features = [
 ] }
 esp-println = { version = "0.18", default-features = false, features = [
     "esp32c3",
+    "jtag-serial",
+] }
+
+# ESP32-S3 firmware examples
+[target.'xtensa-esp32s3-none-elf'.dev-dependencies]
+esp-hal = { version = "1.2.2", features = ["rt"] }
+esp-bootloader-esp-idf = { version = "0.5", features = ["esp32s3"] }
+esp-backtrace = { version = "0.20", default-features = false, features = [
+    "esp32s3",
+    "panic-handler",
+    "println",
+] }
+esp-println = { version = "0.18", default-features = false, features = [
+    "esp32s3",
     "jtag-serial",
 ] }
 
@@ -81,3 +98,9 @@ name = "esp32c3_rf24_external"
 path = "examples/esp32c3_rf24_external.rs"
 test = false
 required-features = ["esp32c3", "rf24-external"]
+
+[[example]]
+name = "esp32s3_hd44780"
+path = "examples/esp32s3_hd44780.rs"
+test = false
+required-features = ["esp32s3", "hd44780"]

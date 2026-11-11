@@ -5,8 +5,8 @@
 //! Platform-specific sensor drivers will be available through
 //! Cargo features.
 
-#[cfg(not(feature = "esp32c3"))]
-compile_error!("Select an ESP32 chip feature, e.g. `esp32c3`.");
+#[cfg(not(any(feature = "esp32c3", feature = "esp32s3")))]
+compile_error!("Select an ESP32 chip feature: `esp32c3` or `esp32s3`.");
 
 #[cfg(feature = "dht11")]
 pub mod dht11;
