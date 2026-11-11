@@ -1,0 +1,20 @@
+[package]
+name = "ferrum-keypad"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portable no_std matrix keypad driver for embedded Rust."
+readme = "README.md"
+keywords = ["keypad", "matrix", "embedded", "no-std", "gpio"]
+categories = ["embedded", "no-std", "hardware-support"]
+
+[badges]
+maintenance = { status = "experimental" }
+
+[dependencies]
+embedded-hal = { workspace = true }
+
+[dev-dependencies]
+embedded-hal-mock = "0.11"

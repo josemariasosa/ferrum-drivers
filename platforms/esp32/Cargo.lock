@@ -845,12 +845,20 @@ dependencies = [
  "esp-println",
  "ferrum-dht11",
  "ferrum-hd44780",
+ "ferrum-keypad",
  "ferrum-nrf24",
  "rf24-rs",
 ]
 
 [[package]]
 name = "ferrum-hd44780"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
+name = "ferrum-keypad"
 version = "0.1.0"
 dependencies = [
  "embedded-hal 1.0.0",
