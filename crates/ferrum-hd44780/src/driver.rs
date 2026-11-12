@@ -4,7 +4,7 @@ use embedded_hal::{delay::DelayNs, digital::OutputPin};
 
 use crate::protocol::{
     CLEAR_DISPLAY, DISPLAY_CONTROL, DISPLAY_ON, DisplayOrientation, DisplaySize, ENTRY_INCREMENT,
-    ENTRY_MODE_SET, FUNCTION_SET, SET_DDRAM_ADDRESS, TWO_LINE,
+    ENTRY_MODE_SET, FUNCTION_SET, SET_CGRAM_ADDRESS, SET_DDRAM_ADDRESS, TWO_LINE,
 };
 
 #[derive(Debug)]
@@ -176,6 +176,28 @@ where
 
         for byte in text.bytes() {
             self.write_char(byte)?;
+        }
+
+        Ok(())
+    }
+
+    /// Defines a custom 5x8 character in CGRAM.
+    ///
+    /// `slot` must be between 0 and 7.
+    /// Only the lowest five bits of each bitmap row are used.
+    ///
+    /// Note: This changes the LCD address counter to CGRAM.
+    pub fn create_char(&mut self, slot: u8, bitmap: &[u8; 8]) -> Result<(), Error<P::Error>> {
+        if slot >= 8 {
+            return Err(Error::InvalidPosition);
+        }
+
+        let address = slot * 8;
+
+        self.command(SET_CGRAM_ADDRESS | address)?;
+
+        for &row in bitmap {
+            self.data(row & 0x1F)?;
         }
 
         Ok(())

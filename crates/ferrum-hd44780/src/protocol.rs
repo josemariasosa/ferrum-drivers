@@ -20,6 +20,10 @@ pub enum DisplaySize {
     Lcd20x4,
 }
 
+/// Set Character Generator RAM address.
+/// CGRAM contains 8 custom characters of 8 bytes each.
+pub const SET_CGRAM_ADDRESS: u8 = 0x40;
+
 impl DisplaySize {
     pub const fn columns(self) -> u8 {
         match self {
@@ -153,5 +157,15 @@ mod tests {
     #[test]
     fn orientation_rejects_invalid_rows() {
         assert_eq!(DisplayOrientation::FlippedRows.map_row(2, 2), None);
+    }
+
+    #[test]
+    fn cgram_slots_have_eight_bytes() {
+        for slot in 0u8..8 {
+            let address = SET_CGRAM_ADDRESS | (slot * 8);
+
+            assert_eq!(address, 0x40 + slot * 8);
+            assert!(address <= 0x78);
+        }
     }
 }
