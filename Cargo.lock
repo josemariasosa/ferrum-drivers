@@ -78,6 +78,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrum-hd44780"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-hal-mock",
+]
+
+[[package]]
+name = "ferrum-keypad"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-hal-mock",
+]
+
+[[package]]
 name = "ferrum-nrf24"
 version = "0.1.0"
 dependencies = [
@@ -278,6 +294,10 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "railrunner"
+version = "0.1.0"
 
 [[package]]
 name = "slab"
